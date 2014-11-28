@@ -25,9 +25,7 @@
 
 package wyil.builders;
 
-import static wycc.lang.SyntaxError.internalFailure;
-import static wycc.lang.SyntaxError.syntaxError;
-import static wyil.util.ErrorMessages.errorMessage;
+import static wyil.util.ErrorMessages.*;
 
 import java.math.BigInteger;
 import java.util.*;
@@ -87,9 +85,9 @@ public class VcTransformer {
 	public void end(VcBranch.ForScope scope, VcBranch branch) {
 		// we need to build up a quantified formula here.
 
-		Expr root = and(scope.constraints,branch.entry());
+		Expr root = and(scope.constraints,attributes(branch));
 
-		SyntacticType type = convert(scope.loop.type.element(), branch.entry());
+		SyntacticType type = convert(scope.loop.type.element(), branch);
 		TypePattern var;
 		Expr varExpr;
 
@@ -120,13 +118,13 @@ public class VcTransformer {
 		root = new Expr.Binary(Expr.Binary.Op.IMPLIES, new Expr.Binary(
 				Expr.Binary.Op.IN, varExpr, scope.source), root);
 
-		branch.add(new Expr.ForAll(var, root, attributes(branch.entry())));
+		branch.add(new Expr.ForAll(var, root, attributes(branch)));
 	}
 
 	public void exit(VcBranch.ForScope scope,
 			VcBranch branch) {
-		Expr root = and(scope.constraints, branch.entry());
-		SyntacticType type = convert(scope.loop.type.element(), branch.entry());
+		Expr root = and(scope.constraints, attributes(branch));
+		SyntacticType type = convert(scope.loop.type.element(), branch);
 		TypePattern var;
 		Expr varExpr;
 
@@ -157,12 +155,7 @@ public class VcTransformer {
 		root = new Expr.Binary(Expr.Binary.Op.AND, new Expr.Binary(
 				Expr.Binary.Op.IN, varExpr, scope.source), root);
 
-		branch.add(new Expr.Exists(var, root, attributes(branch.entry())));
-	}
-
-	public void exit(VcBranch.TryScope scope,
-			VcBranch branch) {
-
+		branch.add(new Expr.Exists(var, root, attributes(branch)));
 	}
 
 	public void exit(VcBranch.AssertOrAssumeScope scope,
@@ -200,12 +193,13 @@ public class VcTransformer {
 			op = Expr.Binary.Op.RANGE;
 			break;
 		default:
-			internalFailure("unknown binary operator", filename, branch.entry());
+			internalFailure("unknown binary operator", filename,
+					branch.attributes());
 			return;
 		}
 
-		branch.write(code.target(), new Expr.Binary(op, lhs, rhs, branch
-				.entry().attributes()), code.assignedType());
+		branch.write(code.target(), new Expr.Binary(op, lhs, rhs,
+				attributes(branch)), code.assignedType());
 	}
 
 	protected void transform(Codes.ListOperator code, VcBranch branch) {
@@ -217,22 +211,23 @@ public class VcTransformer {
 			// do nothing
 			break;
 		case LEFT_APPEND:
-			rhs = new Expr.Nary(Expr.Nary.Op.LIST,new Expr[] { rhs }, attributes(branch.entry()));
+			rhs = new Expr.Nary(Expr.Nary.Op.LIST,new Expr[] { rhs }, attributes(branch));
 			break;
 		case RIGHT_APPEND:
-			lhs = new Expr.Nary(Expr.Nary.Op.LIST,new Expr[] { lhs }, attributes(branch.entry()));
+			lhs = new Expr.Nary(Expr.Nary.Op.LIST,new Expr[] { lhs }, attributes(branch));
 			break;
 		default:
-			internalFailure("unknown binary operator", filename, branch.entry());
+			internalFailure("unknown binary operator", filename,
+					branch.attributes());
 			return;
 		}
 
 		branch.write(code.target(), new Expr.Binary(Expr.Binary.Op.LISTAPPEND,
-				lhs, rhs, attributes(branch.entry())), code.assignedType());
+				lhs, rhs, attributes(branch)), code.assignedType());
 	}
 
 	protected void transform(Codes.SetOperator code, VcBranch branch) {
-		Collection<Attribute> attributes = attributes(branch.entry());
+		Collection<Attribute> attributes = attributes(branch);
 		Expr lhs = branch.read(code.operand(0));
 		Expr rhs = branch.read(code.operand(1));
 		Expr val;
@@ -242,38 +237,39 @@ public class VcTransformer {
 			val = new Expr.Binary(Expr.Binary.Op.SETUNION,lhs, rhs, attributes);
 			break;
 		case LEFT_UNION:
-			rhs = new Expr.Nary(Expr.Nary.Op.SET, new Expr[] { rhs }, branch
-					.entry().attributes());
+			rhs = new Expr.Nary(Expr.Nary.Op.SET, new Expr[] { rhs },
+					attributes(branch));
 			val = new Expr.Binary(Expr.Binary.Op.SETUNION,lhs, rhs, attributes);
 			break;
 		case RIGHT_UNION:
-			lhs = new Expr.Nary(Expr.Nary.Op.SET, new Expr[] { lhs }, branch
-					.entry().attributes());
+			lhs = new Expr.Nary(Expr.Nary.Op.SET, new Expr[] { lhs },
+					attributes(branch));
 			val = new Expr.Binary(Expr.Binary.Op.SETUNION,lhs, rhs, attributes);
 			break;
 		case INTERSECTION:
 			val = new Expr.Binary(Expr.Binary.Op.SETINTERSECTION,lhs, rhs, attributes);
 			break;
 		case LEFT_INTERSECTION:
-			rhs = new Expr.Nary(Expr.Nary.Op.SET, new Expr[] { rhs }, branch
-					.entry().attributes());
+			rhs = new Expr.Nary(Expr.Nary.Op.SET, new Expr[] { rhs },
+					attributes(branch));
 			val = new Expr.Binary(Expr.Binary.Op.SETINTERSECTION,lhs, rhs, attributes);
 			break;
 		case RIGHT_INTERSECTION:
-			lhs = new Expr.Nary(Expr.Nary.Op.SET, new Expr[] { lhs }, branch
-					.entry().attributes());
+			lhs = new Expr.Nary(Expr.Nary.Op.SET, new Expr[] { lhs },
+					attributes(branch));
 			val = new Expr.Binary(Expr.Binary.Op.SETINTERSECTION,lhs, rhs, attributes);
 			break;
 		case LEFT_DIFFERENCE:
-			rhs = new Expr.Nary(Expr.Nary.Op.SET, new Expr[] { rhs }, branch
-					.entry().attributes());
+			rhs = new Expr.Nary(Expr.Nary.Op.SET, new Expr[] { rhs },
+					attributes(branch));
 			val = new Expr.Binary(Expr.Binary.Op.SETDIFFERENCE,lhs, rhs, attributes);
 			break;
 		case DIFFERENCE:
 			val = new Expr.Binary(Expr.Binary.Op.SETDIFFERENCE,lhs, rhs, attributes);
 			break;
 		default:
-			internalFailure("unknown binary operator", filename, branch.entry());
+			internalFailure("unknown binary operator", filename,
+					branch.attributes());
 			return;
 		}
 
@@ -281,7 +277,7 @@ public class VcTransformer {
 	}
 
 	protected void transform(Codes.StringOperator code, VcBranch branch) {
-		Collection<Attribute> attributes = attributes(branch.entry());
+		Collection<Attribute> attributes = attributes(branch);
 		Expr lhs = branch.read(code.operand(0));
 		Expr rhs = branch.read(code.operand(1));
 
@@ -290,18 +286,19 @@ public class VcTransformer {
 			// do nothing
 			break;
 		case LEFT_APPEND:
-			rhs = new Expr.Nary(Expr.Nary.Op.LIST,new Expr[] { rhs }, attributes(branch.entry()));
+			rhs = new Expr.Nary(Expr.Nary.Op.LIST,new Expr[] { rhs }, attributes(branch));
 			break;
 		case RIGHT_APPEND:
-			lhs = new Expr.Nary(Expr.Nary.Op.LIST,new Expr[] { lhs }, attributes(branch.entry()));
+			lhs = new Expr.Nary(Expr.Nary.Op.LIST,new Expr[] { lhs }, attributes(branch));
 			break;
 		default:
-			internalFailure("unknown binary operator", filename, branch.entry());
+			internalFailure("unknown binary operator", filename,
+					branch.attributes());
 			return;
 		}
 
 		branch.write(code.target(), new Expr.Binary(Expr.Binary.Op.LISTAPPEND,
-				lhs, rhs, attributes(branch.entry())), code.assignedType());
+				lhs, rhs, attributes(branch)), code.assignedType());
 	}
 
 	protected void transform(Codes.Convert code, VcBranch branch) {
@@ -311,9 +308,9 @@ public class VcTransformer {
 	}
 
 	protected void transform(Codes.Const code, VcBranch branch) {
-		Value val = convert(code.constant, branch.entry());
-		branch.write(code.target(), new Expr.Constant(val, branch.entry()
-				.attributes()), code.assignedType());
+		Value val = convert(code.constant, branch);
+		branch.write(code.target(), new Expr.Constant(val, attributes(branch)),
+				code.assignedType());
 	}
 
 	protected void transform(Codes.Debug code, VcBranch branch) {
@@ -331,22 +328,22 @@ public class VcTransformer {
 		if (scope.isAssertion) {
 			Expr assumptions = branch.constraints();
 			Expr implication = new Expr.Binary(Expr.Binary.Op.IMPLIES,
-					assumptions, new Expr.Constant(Value.Bool(false), branch
-							.entry().attributes()));
+					assumptions, new Expr.Constant(Value.Bool(false),
+							attributes(branch)));
 			// build up list of used variables
 			HashSet<String> uses = new HashSet<String>();
 			implication.freeVariables(uses);
 			// Now, parameterise the assertion appropriately
 			Expr assertion = buildAssertion(0, implication, uses, branch);
 			wycsFile.add(wycsFile.new Assert(code.message.value, assertion,
-					attributes(branch.entry())));
+					attributes(branch)));
 		} else {
 			// do nothing?
 		}
 	}
 
 	protected void transform(Codes.FieldLoad code, VcBranch branch) {
-		Collection<Attribute> attributes = attributes(branch.entry());
+		Collection<Attribute> attributes = attributes(branch);
 		// Expr src = branch.read(code.operand);
 		// branch.write(code.target, Exprs.FieldOf(src, code.field,
 		// attributes));
@@ -355,7 +352,7 @@ public class VcTransformer {
 		Collections.sort(fields);
 		Expr src = branch.read(code.operand(0));
 		Expr index = new Expr.Constant(Value.Integer(BigInteger.valueOf(fields.indexOf(code.field))));
-		Expr result = new Expr.IndexOf(src, index, attributes(branch.entry()));
+		Expr result = new Expr.IndexOf(src, index, attributes(branch));
 		branch.write(code.target(), result, code.assignedType());
 	}
 
@@ -377,8 +374,7 @@ public class VcTransformer {
 
 	protected void transform(Codes.Invoke code, VcBranch branch)
 			throws Exception {
-		SyntacticElement entry = branch.entry();
-		Collection<Attribute> attributes = entry.attributes();
+		Collection<Attribute> attributes = attributes(branch);
 		int[] code_operands = code.operands();
 		if (code.target() != Codes.NULL_REG) {
 			// Need to assume the post-condition holds.
@@ -395,14 +391,14 @@ public class VcTransformer {
 
 			// Here, we must add a WycsFile Function to represent the function being called, and to prototype it.
 			TypePattern from = new TypePattern.Leaf(convert(code.type()
-					.params(), entry), null, attributes);
+					.params(), branch), null, attributes);
 			TypePattern to = new TypePattern.Leaf(convert(code.type().ret(),
-					entry), null, attributes);
+					branch), null, attributes);
 			wycsFile.add(wycsFile.new Function(toIdentifier(code.name),
 					Collections.EMPTY_LIST, from, to, null));
 
-			List<CodeBlock> ensures = findPostcondition(code.name, code.type(),
-					branch.entry());
+			List<AttributedCodeBlock> ensures = findPostcondition(code.name, code.type(),
+					branch);
 
 			if (ensures.size() > 0) {
 				// operands = Arrays.copyOf(operands, operands.length);
@@ -433,14 +429,14 @@ public class VcTransformer {
 	protected void transform(Codes.IndexOf code, VcBranch branch) {
 		Expr src = branch.read(code.operand(0));
 		Expr idx = branch.read(code.operand(1));
-		branch.write(code.target(), new Expr.IndexOf(src, idx, branch.entry()
-				.attributes()), code.assignedType());
+		branch.write(code.target(), new Expr.IndexOf(src, idx,
+				attributes(branch)), code.assignedType());
 	}
 
 	protected void transform(Codes.LengthOf code, VcBranch branch) {
 		Expr src = branch.read(code.operand(0));
 		branch.write(code.target(), new Expr.Unary(Expr.Unary.Op.LENGTHOF, src,
-				attributes(branch.entry())), code.assignedType());
+				attributes(branch)), code.assignedType());
 	}
 
 	protected void transform(Codes.Loop code, VcBranch branch) {
@@ -463,7 +459,7 @@ public class VcTransformer {
 			vals[i] = branch.read(code_operands[i]);
 		}
 		branch.write(code.target(), new Expr.Nary(Expr.Nary.Op.LIST, vals,
-				attributes(branch.entry())), code.assignedType());
+				attributes(branch)), code.assignedType());
 	}
 
 	protected void transform(Codes.NewSet code, VcBranch branch) {
@@ -473,7 +469,7 @@ public class VcTransformer {
 			vals[i] = branch.read(code_operands[i]);
 		}
 		branch.write(code.target(), new Expr.Nary(Expr.Nary.Op.SET, vals,
-				attributes(branch.entry())), code.assignedType());
+				attributes(branch)), code.assignedType());
 	}
 
 	protected void transform(Codes.NewRecord code, VcBranch branch) {
@@ -487,7 +483,7 @@ public class VcTransformer {
 		}
 
 		branch.write(code.target(), new Expr.Nary(Expr.Nary.Op.TUPLE, vals,
-				attributes(branch.entry())), code.assignedType());
+				attributes(branch)), code.assignedType());
 	}
 
 	protected void transform(Codes.NewObject code, VcBranch branch) {
@@ -501,8 +497,8 @@ public class VcTransformer {
 		for (int i = 0; i != vals.length; ++i) {
 			vals[i] = branch.read(code_operands[i]);
 		}
-		branch.write(code.target(), new Expr.Nary(Expr.Nary.Op.TUPLE, vals, branch
-				.entry().attributes()), code.assignedType());
+		branch.write(code.target(), new Expr.Nary(Expr.Nary.Op.TUPLE, vals,
+				attributes(branch)), code.assignedType());
 	}
 
 	protected void transform(Codes.Nop code, VcBranch branch) {
@@ -518,7 +514,7 @@ public class VcTransformer {
 		Expr start = branch.read(code.operands()[1]);
 		Expr end = branch.read(code.operands()[2]);
 		Expr result = new Expr.Ternary(Expr.Ternary.Op.SUBLIST, src, start, end,
-				attributes(branch.entry()));
+				attributes(branch));
 		branch.write(code.target(), result, code.assignedType());
 	}
 
@@ -526,8 +522,8 @@ public class VcTransformer {
 		Expr src = branch.read(code.operands()[0]);
 		Expr start = branch.read(code.operands()[1]);
 		Expr end = branch.read(code.operands()[2]);
-		Expr result = new Expr.Ternary(Expr.Ternary.Op.SUBLIST, src, start, end,
-				branch.entry().attributes);
+		Expr result = new Expr.Ternary(Expr.Ternary.Op.SUBLIST, src, start,
+				end, attributes(branch));
 		branch.write(code.target(), result, code.assignedType());
 	}
 
@@ -536,35 +532,27 @@ public class VcTransformer {
 		for(int i=0;i!=cases.length;++i) {
 			Constant caseValue = code.branches.get(i).first();
 			VcBranch branch = cases[i];
-			List<Attribute> attributes = attributes(branch.entry());
+			Collection<Attribute> attributes = attributes(branch);
 			Expr src = branch.read(code.operand);
-			Expr constant = new Expr.Constant(convert(caseValue, branch.entry()),attributes);
+			Expr constant = new Expr.Constant(convert(caseValue, branch),attributes);
 			branch.add(new Expr.Binary(Expr.Binary.Op.EQ, src, constant, attributes));
 			defaultCase.add(new Expr.Binary(Expr.Binary.Op.NEQ, src, constant, attributes));
 		}
-	}
-
-	protected void transform(Codes.Throw code, VcBranch branch) {
-		// TODO
 	}
 
 	protected void transform(Codes.TupleLoad code, VcBranch branch) {
 		Expr src = branch.read(code.operand(0));
 		Expr index = new Expr.Constant(Value.Integer(BigInteger
 				.valueOf(code.index)));
-		Expr result = new Expr.IndexOf(src, index, attributes(branch.entry()));
+		Expr result = new Expr.IndexOf(src, index, attributes(branch));
 		branch.write(code.target(), result, code.assignedType());
-	}
-
-	protected void transform(Codes.TryCatch code, VcBranch branch) {
-		// FIXME: do something here?
 	}
 
 	protected void transform(Codes.UnaryOperator code, VcBranch branch) {
 		if (code.kind == Codes.UnaryOperatorKind.NEG) {
 			Expr operand = branch.read(code.operand(0));
 			branch.write(code.target(), new Expr.Unary(Expr.Unary.Op.NEG,
-					operand, attributes(branch.entry())), code.assignedType());
+					operand, attributes(branch)), code.assignedType());
 		} else {
 			// TODO
 			branch.invalidate(code.target(),code.type());
@@ -583,7 +571,7 @@ public class VcTransformer {
 		if (!iter.hasNext()) {
 			return result;
 		} else {
-			Collection<Attribute> attributes = attributes(branch.entry());
+			Collection<Attribute> attributes = attributes(branch);
 			Codes.LVal lv = iter.next();
 			if (lv instanceof Codes.RecordLVal) {
 				Codes.RecordLVal rlv = (Codes.RecordLVal) lv;
@@ -612,7 +600,7 @@ public class VcTransformer {
 				result = updateHelper(iter, new Expr.IndexOf(source, index,
 						attributes), result, branch);
 				return new Expr.Ternary(Expr.Ternary.Op.UPDATE, source, index,
-						result, attributes(branch.entry()));
+						result, attributes(branch));
 			} else if (lv instanceof Codes.MapLVal) {
 				return source; // TODO
 			} else if (lv instanceof Codes.StringLVal) {
@@ -623,14 +611,14 @@ public class VcTransformer {
 		}
 	}
 
-	protected List<CodeBlock> findPrecondition(NameID name, Type.FunctionOrMethod fun,
-			SyntacticElement elem) throws Exception {
+	protected List<AttributedCodeBlock> findPrecondition(NameID name, Type.FunctionOrMethod fun,
+			VcBranch branch) throws Exception {
 		Path.Entry<WyilFile> e = builder.project().get(name.module(),
 				WyilFile.ContentType);
 		if (e == null) {
 			syntaxError(
 					errorMessage(ErrorMessages.RESOLUTION_ERROR, name.module()
-							.toString()), filename, elem);
+							.toString()), filename, attributes);
 		}
 		WyilFile m = e.read();
 		WyilFile.FunctionOrMethodDeclaration method = m.functionOrMethod(name.name(), fun);
@@ -643,8 +631,8 @@ public class VcTransformer {
 		return null;
 	}
 
-	protected List<CodeBlock> findPostcondition(NameID name,
-			Type.FunctionOrMethod fun, SyntacticElement elem) throws Exception {
+	protected List<AttributedCodeBlock> findPostcondition(NameID name,
+			Type.FunctionOrMethod fun, VcBranch branch) throws Exception {
 		Path.Entry<WyilFile> e = builder.project().get(name.module(),
 				WyilFile.ContentType);
 		if (e == null) {
@@ -734,7 +722,7 @@ public class VcTransformer {
 					if (uses.contains(v.name)) {
 						// only include variable if actually used
 						uses.remove(v.name);
-						SyntacticType t = convert(branch.typeOf(v.name),branch.entry());
+						SyntacticType t = convert(branch.typeOf(v.name),branch);
 						vars.add(new TypePattern.Leaf(t, v));
 					}
 				}
@@ -742,13 +730,12 @@ public class VcTransformer {
 				// occur from modified operands of loops which are no longer on
 				// the scope stack.
 				for (String v : uses) {
-					SyntacticType t = convert(branch.typeOf(v),branch.entry());
+					SyntacticType t = convert(branch.typeOf(v), branch);
 					vars.add(new TypePattern.Leaf(t, new Expr.Variable(v)));
 				}
 			} else if (scope instanceof VcBranch.ForScope) {
 				VcBranch.ForScope ls = (VcBranch.ForScope) scope;
-				SyntacticType type = convert(ls.loop.type.element(),
-						branch.entry());
+				SyntacticType type = convert(ls.loop.type.element(), branch);
 
 				// first, deal with index expression
 				int[] modifiedOperands = ls.loop.modifiedOperands;
@@ -789,7 +776,7 @@ public class VcTransformer {
 						// Only parameterise a modified operand if it is
 						// actually used.
 						uses.remove(v.name);
-						SyntacticType t = convert(branch.typeOf(v.name),branch.entry());
+						SyntacticType t = convert(branch.typeOf(v.name),branch);
 						vars.add(new TypePattern.Leaf(t, v));
 					}
 				}
@@ -805,7 +792,7 @@ public class VcTransformer {
 						// Only parameterise a modified operand if it is
 						// actually used.
 						uses.remove(v.name);
-						SyntacticType t = convert(branch.typeOf(v.name),branch.entry());
+						SyntacticType t = convert(branch.typeOf(v.name),branch);
 						vars.add(new TypePattern.Leaf(t, v));
 					}
 				}
@@ -866,11 +853,11 @@ public class VcTransformer {
 			break;
 		default:
 			internalFailure("unknown comparator (" + cop + ")", filename,
-					branch.entry());
+					branch.attributes());
 			return null;
 		}
 
-		return new Expr.Binary(op, lhs, rhs, attributes(branch.entry()));
+		return new Expr.Binary(op, lhs, rhs, attributes(branch));
 	}
 
 	/**
@@ -926,7 +913,7 @@ public class VcTransformer {
 				test.attributes());
 	}
 
-	public Value convert(Constant c, SyntacticElement elem) {
+	public Value convert(Constant c, VcBranch branch) {
 		if (c instanceof Constant.Null) {
 			// TODO: is this the best translation?
 			return wycs.core.Value.Integer(BigInteger.ZERO);
@@ -963,7 +950,7 @@ public class VcTransformer {
 			for (int i = 0; i != cb_values.size(); ++i) {
 				ArrayList<Value> pair = new ArrayList<Value>();
 				pair.add(Value.Integer(BigInteger.valueOf(i)));
-				pair.add(convert(cb_values.get(i), elem));
+				pair.add(convert(cb_values.get(i), branch));
 				pairs.add(Value.Tuple(pair));
 			}
 			return Value.Set(pairs);
@@ -972,8 +959,8 @@ public class VcTransformer {
 			ArrayList<Value> pairs = new ArrayList<Value>();
 			for (Map.Entry<Constant, Constant> e : cb.values.entrySet()) {
 				ArrayList<Value> pair = new ArrayList<Value>();
-				pair.add(convert(e.getKey(), elem));
-				pair.add(convert(e.getValue(), elem));
+				pair.add(convert(e.getKey(), branch));
+				pair.add(convert(e.getValue(), branch));
 				pairs.add(Value.Tuple(pair));
 			}
 			return Value.Set(pairs);
@@ -981,14 +968,14 @@ public class VcTransformer {
 			Constant.Set cb = (Constant.Set) c;
 			ArrayList<Value> values = new ArrayList<Value>();
 			for (Constant v : cb.values) {
-				values.add(convert(v, elem));
+				values.add(convert(v, branch));
 			}
 			return wycs.core.Value.Set(values);
 		} else if (c instanceof Constant.Tuple) {
 			Constant.Tuple cb = (Constant.Tuple) c;
 			ArrayList<Value> values = new ArrayList<Value>();
 			for (Constant v : cb.values) {
-				values.add(convert(v, elem));
+				values.add(convert(v, branch));
 			}
 			return wycs.core.Value.Tuple(values);
 		} else if (c instanceof Constant.Record) {
@@ -1005,7 +992,7 @@ public class VcTransformer {
 			Collections.sort(fields);
 			ArrayList<Value> values = new ArrayList<Value>();
 			for (String field : fields) {
-				values.add(convert(rb.values.get(field), elem));
+				values.add(convert(rb.values.get(field), branch));
 			}
 			return wycs.core.Value.Tuple(values);
 		} else {
@@ -1015,63 +1002,64 @@ public class VcTransformer {
 		}
 	}
 
-	private SyntacticType convert(List<Type> types, SyntacticElement elem) {
+	private SyntacticType convert(List<Type> types,
+			VcBranch branch) {
 		ArrayList<SyntacticType> ntypes = new ArrayList<SyntacticType>();
 		for(int i=0;i!=types.size();++i) {
-			ntypes.add(convert(types.get(i),elem));
+			ntypes.add(convert(types.get(i),branch));
 		}
 		return new SyntacticType.Tuple(ntypes);
 	}
 
-	private SyntacticType convert(Type t, AttributedCodeBlock.Entry elem) {
+	private SyntacticType convert(Type t, VcBranch branch) {
 		// FIXME: this is fundamentally broken in the case of recursive types.
 		// See Issue #298.
 		if (t instanceof Type.Any) {
-			return new SyntacticType.Any(elem.attributes());
+			return new SyntacticType.Any(attributes(branch));
 		} else if (t instanceof Type.Void) {
-			return new SyntacticType.Void(elem.attributes());
+			return new SyntacticType.Void(attributes(branch));
 		} else if (t instanceof Type.Null) {
 			// FIXME: implement SyntacticType.Null
-			//return new SyntacticType.Null(elem.attributes());
-			return new SyntacticType.Any(elem.attributes());
+			//return new SyntacticType.Null(attributes(branch));
+			return new SyntacticType.Any(attributes(branch));
 		} else if (t instanceof Type.Bool) {
-			return new SyntacticType.Bool(elem.attributes());
+			return new SyntacticType.Bool(attributes(branch));
 		} else if (t instanceof Type.Char) {
 			// FIXME: implement SyntacticType.Char
-			//return new SyntacticType.Char(elem.attributes());
-			return new SyntacticType.Int(elem.attributes());
+			//return new SyntacticType.Char(attributes(branch));
+			return new SyntacticType.Int(attributes(branch));
 		} else if (t instanceof Type.Byte) {
 			// FIXME: implement SyntacticType.Byte
-			//return new SyntacticType.Byte(elem.attributes());
-			return new SyntacticType.Int(elem.attributes());
+			//return new SyntacticType.Byte(attributes(branch));
+			return new SyntacticType.Int(attributes(branch));
 		} else if (t instanceof Type.Int) {
-			return new SyntacticType.Int(elem.attributes());
+			return new SyntacticType.Int(attributes(branch));
 		} else if (t instanceof Type.Real) {
-			return new SyntacticType.Real(elem.attributes());
+			return new SyntacticType.Real(attributes(branch));
 		} else if (t instanceof Type.Strung) {
 			// FIXME: implement SyntacticType.Strung
-			//return new SyntacticType.Strung(elem.attributes());
-			return new SyntacticType.List(new SyntacticType.Int(elem.attributes()));
+			//return new SyntacticType.Strung(attributes(branch));
+			return new SyntacticType.List(new SyntacticType.Int(attributes(branch)));
 		} else if (t instanceof Type.Set) {
 			Type.Set st = (Type.Set) t;
-			SyntacticType element = convert(st.element(), elem);
+			SyntacticType element = convert(st.element(), branch);
 			return new SyntacticType.Set(element);
 		} else if (t instanceof Type.Map) {
 			Type.Map lt = (Type.Map) t;
-			SyntacticType from = convert(lt.key(), elem);
-			SyntacticType to = convert(lt.value(), elem);
+			SyntacticType from = convert(lt.key(), branch);
+			SyntacticType to = convert(lt.value(), branch);
 			// ugly.
 			return new SyntacticType.Map(from,to);
 		} else if (t instanceof Type.List) {
 			Type.List lt = (Type.List) t;
-			SyntacticType element = convert(lt.element(), elem);
+			SyntacticType element = convert(lt.element(), branch);
 			// ugly.
 			return new SyntacticType.List(element);
 		} else if (t instanceof Type.Tuple) {
 			Type.Tuple tt = (Type.Tuple) t;
 			ArrayList<SyntacticType> elements = new ArrayList<SyntacticType>();
 			for (int i = 0; i != tt.size(); ++i) {
-				elements.add(convert(tt.element(i), elem));
+				elements.add(convert(tt.element(i), branch));
 			}
 			return new SyntacticType.Tuple(elements);
 		} else if (t instanceof Type.Record) {
@@ -1082,7 +1070,7 @@ public class VcTransformer {
 			Collections.sort(names);
 			for (int i = 0; i != names.size(); ++i) {
 				String field = names.get(i);
-				elements.add(convert(fields.get(field), elem));
+				elements.add(convert(fields.get(field), branch));
 			}
 			return new SyntacticType.Tuple(elements);
 		} else if (t instanceof Type.Reference) {
@@ -1093,19 +1081,19 @@ public class VcTransformer {
 			HashSet<Type> tu_elements = tu.bounds();
 			ArrayList<SyntacticType> elements = new ArrayList<SyntacticType>();
 			for (Type te : tu_elements) {
-				elements.add(convert(te, elem));
+				elements.add(convert(te, branch));
 			}
 			return new SyntacticType.Union(elements);
 		} else if (t instanceof Type.Negation) {
 			Type.Negation nt = (Type.Negation) t;
-			SyntacticType element = convert(nt.element(), elem);
+			SyntacticType element = convert(nt.element(), branch);
 			return new SyntacticType.Negation(element);
 		} else if (t instanceof Type.FunctionOrMethod) {
 			Type.FunctionOrMethod ft = (Type.FunctionOrMethod) t;
 			return new SyntacticType.Any();
 		} else {
 			internalFailure("unknown type encountered (" + t.getClass().getName() + ")", filename,
-					elem);
+					branch.attributes());
 			return null;
 		}
 	}
@@ -1139,8 +1127,15 @@ public class VcTransformer {
 		return id.toString().replace(":","_").replace("/","_");
 	}
 
+	/**
+	 * Convert the attributes at the current location in a given branch into
+	 * those appropriate for WyCC.
+	 * 
+	 * @param branch
+	 * @return
+	 */
 	private static Collection<wycc.lang.Attribute> attributes(
-			AttributedCodeBlock.Entry entry) {
+			VcBranch branch) {
 		// FIXME: to do!
 		return Collections.EMPTY_LIST;
 	}

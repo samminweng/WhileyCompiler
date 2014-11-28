@@ -28,6 +28,7 @@ package wyil.builders;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.BitSet;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 
@@ -220,10 +221,24 @@ public class VcBranch {
 	 *
 	 * @return
 	 */
-	public AttributedCodeBlock.Entry entry() {
-		return block.getEntry(pc);
+	public CodeBlock.Index entry() {
+		// FIXME: IMPLEMENT ME!
+		return null;
 	}
 
+	/**
+	 * Return the attributes associated with the bytecode at the current
+	 * position in the branch. This is primarily useful for debugging purposes,
+	 * as it means we can access the source-code location in the originating
+	 * source file.
+	 * 
+	 * @return
+	 */
+	public Collection<Attribute> attributes() {
+		// FIXME: implement me!
+		return null;
+	}
+	
 	/**
 	 * Get the constraint variable which corresponds to the given Wyil bytecode
 	 * register at this point on this branch.
@@ -242,7 +257,7 @@ public class VcBranch {
 	 */
 	public Type typeOf(String var) {
 		// FIXME: this is such an *horrific* hack, I can't believe I'm doing it.
-		// But, it does work most of the time:(
+		// But, it does work most of the time :(
 		String[] split = var.split("_");
 		int register = Integer.parseInt(split[0].substring(1));
 		return types[register];
@@ -475,11 +490,6 @@ public class VcBranch {
 					transformer.end(ls,this);
 					break;
 				}
-			} else if(code instanceof Codes.TryCatch) {
-				Codes.TryCatch tc = (Codes.TryCatch) code;
-				scopes.add(new TryScope(findLabelIndex(tc.target),
-						Collections.EMPTY_LIST));
-				transformer.transform(tc, this);
 			} else if(code instanceof Codes.AssertOrAssume) {
 				Codes.AssertOrAssume ac = (Codes.AssertOrAssume) code;
 				boolean isAssertion = code instanceof Codes.Assert;
@@ -712,25 +722,6 @@ public class VcBranch {
 
 		public ForScope clone() {
 			return new ForScope(loop, end, constraints, source, index);
-		}
-	}
-
-	/**
-	 * Represents the scope of a general try-catch handler.
-	 *
-	 * @author David J. Pearce
-	 *
-	 * @param <T>
-	 */
-	public static class TryScope extends
-			VcBranch.Scope {
-
-		public TryScope(int end, List<Expr> constraints) {
-			super(end,constraints);
-		}
-
-		public TryScope clone() {
-			return new TryScope(end,constraints);
 		}
 	}
 
