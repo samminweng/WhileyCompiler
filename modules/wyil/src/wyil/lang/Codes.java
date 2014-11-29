@@ -1765,16 +1765,6 @@ public abstract class Codes {
 			public String toString() {
 				return "append";
 			}
-		},
-		LEFT_APPEND(1) {
-			public String toString() {
-				return "appendl";
-			}
-		},
-		RIGHT_APPEND(2) {
-			public String toString() {
-				return "appendr";
-			}
 		};
 		public final int offset;
 
@@ -2958,40 +2948,15 @@ public abstract class Codes {
 			public String toString() {
 				return "union";
 			}
-		},
-		LEFT_UNION(1) {
-			public String toString() {
-				return "unionl";
-			}
-		},
-		RIGHT_UNION(2) {
-			public String toString() {
-				return "unionl";
-			}
-		},
-		INTERSECTION(3) {
+		},		
+		INTERSECTION(1) {
 			public String toString() {
 				return "intersect";
 			}
 		},
-		LEFT_INTERSECTION(4) {
-			public String toString() {
-				return "intersectl";
-			}
-		},
-		RIGHT_INTERSECTION(5) {
-			public String toString() {
-				return "intersectr";
-			}
-		},
-		DIFFERENCE(6) {
+		DIFFERENCE(2) {
 			public String toString() {
 				return "diff";
-			}
-		},
-		LEFT_DIFFERENCE(7) {
-			public String toString() {
-				return "diffl";
 			}
 		};
 		public final int offset;

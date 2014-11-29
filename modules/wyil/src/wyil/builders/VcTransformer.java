@@ -171,109 +171,36 @@ public class VcTransformer {
 		branch.write(code.target(), branch.read(code.operand(0)), code.assignedType());
 	}
 
+	/**
+	 * Maps binary bytecodes into expression opcodes.
+	 */
+	private static Expr.Binary.Op[] binaryOperatorMap = {
+		Expr.Binary.Op.ADD,
+		Expr.Binary.Op.SUB,
+		Expr.Binary.Op.MUL,
+		Expr.Binary.Op.DIV,
+		Expr.Binary.Op.RANGE
+	};
+	
 	protected void transform(Codes.BinaryOperator code, VcBranch branch) {
-		Expr lhs = branch.read(code.operand(0));
-		Expr rhs = branch.read(code.operand(1));
-		Expr.Binary.Op op;
-
-		switch (code.kind) {
-		case ADD:
-			op = Expr.Binary.Op.ADD;
-			break;
-		case SUB:
-			op = Expr.Binary.Op.SUB;
-			break;
-		case MUL:
-			op = Expr.Binary.Op.MUL;
-			break;
-		case DIV:
-			op = Expr.Binary.Op.DIV;
-			break;
-		case RANGE:
-			op = Expr.Binary.Op.RANGE;
-			break;
-		default:
-			internalFailure("unknown binary operator", filename,
-					branch.attributes());
-			return;
-		}
-
-		branch.write(code.target(), new Expr.Binary(op, lhs, rhs,
-				attributes(branch)), code.assignedType());
+		transformBinary(binaryOperatorMap[code.kind.ordinal()], code, branch);
 	}
 
 	protected void transform(Codes.ListOperator code, VcBranch branch) {
-		Expr lhs = branch.read(code.operand(0));
-		Expr rhs = branch.read(code.operand(1));
-
-		switch (code.kind) {
-		case APPEND:
-			// do nothing
-			break;
-		case LEFT_APPEND:
-			rhs = new Expr.Nary(Expr.Nary.Op.LIST,new Expr[] { rhs }, attributes(branch));
-			break;
-		case RIGHT_APPEND:
-			lhs = new Expr.Nary(Expr.Nary.Op.LIST,new Expr[] { lhs }, attributes(branch));
-			break;
-		default:
-			internalFailure("unknown binary operator", filename,
-					branch.attributes());
-			return;
-		}
-
-		branch.write(code.target(), new Expr.Binary(Expr.Binary.Op.LISTAPPEND,
-				lhs, rhs, attributes(branch)), code.assignedType());
+		transformBinary(Expr.Binary.Op.LISTAPPEND,code,branch);
 	}
 
+	/**
+	 * Maps binary bytecodes into expression opcodes.
+	 */
+	private static Expr.Binary.Op[] setOperatorMap = {
+		Expr.Binary.Op.SETUNION,
+		Expr.Binary.Op.SETINTERSECTION,
+		Expr.Binary.Op.SETDIFFERENCE
+	};
+	
 	protected void transform(Codes.SetOperator code, VcBranch branch) {
-		Collection<Attribute> attributes = attributes(branch);
-		Expr lhs = branch.read(code.operand(0));
-		Expr rhs = branch.read(code.operand(1));
-		Expr val;
-
-		switch (code.kind) {
-		case UNION:
-			val = new Expr.Binary(Expr.Binary.Op.SETUNION,lhs, rhs, attributes);
-			break;
-		case LEFT_UNION:
-			rhs = new Expr.Nary(Expr.Nary.Op.SET, new Expr[] { rhs },
-					attributes(branch));
-			val = new Expr.Binary(Expr.Binary.Op.SETUNION,lhs, rhs, attributes);
-			break;
-		case RIGHT_UNION:
-			lhs = new Expr.Nary(Expr.Nary.Op.SET, new Expr[] { lhs },
-					attributes(branch));
-			val = new Expr.Binary(Expr.Binary.Op.SETUNION,lhs, rhs, attributes);
-			break;
-		case INTERSECTION:
-			val = new Expr.Binary(Expr.Binary.Op.SETINTERSECTION,lhs, rhs, attributes);
-			break;
-		case LEFT_INTERSECTION:
-			rhs = new Expr.Nary(Expr.Nary.Op.SET, new Expr[] { rhs },
-					attributes(branch));
-			val = new Expr.Binary(Expr.Binary.Op.SETINTERSECTION,lhs, rhs, attributes);
-			break;
-		case RIGHT_INTERSECTION:
-			lhs = new Expr.Nary(Expr.Nary.Op.SET, new Expr[] { lhs },
-					attributes(branch));
-			val = new Expr.Binary(Expr.Binary.Op.SETINTERSECTION,lhs, rhs, attributes);
-			break;
-		case LEFT_DIFFERENCE:
-			rhs = new Expr.Nary(Expr.Nary.Op.SET, new Expr[] { rhs },
-					attributes(branch));
-			val = new Expr.Binary(Expr.Binary.Op.SETDIFFERENCE,lhs, rhs, attributes);
-			break;
-		case DIFFERENCE:
-			val = new Expr.Binary(Expr.Binary.Op.SETDIFFERENCE,lhs, rhs, attributes);
-			break;
-		default:
-			internalFailure("unknown binary operator", filename,
-					branch.attributes());
-			return;
-		}
-
-		branch.write(code.target(), val, code.assignedType());
+		transformBinary(setOperatorMap[code.kind.ordinal()], code, branch);
 	}
 
 	protected void transform(Codes.StringOperator code, VcBranch branch) {
@@ -297,6 +224,8 @@ public class VcTransformer {
 			return;
 		}
 
+		// TODO: after removing left append we can simplify this case.
+		
 		branch.write(code.target(), new Expr.Binary(Expr.Binary.Op.LISTAPPEND,
 				lhs, rhs, attributes(branch)), code.assignedType());
 	}
@@ -434,9 +363,7 @@ public class VcTransformer {
 	}
 
 	protected void transform(Codes.LengthOf code, VcBranch branch) {
-		Expr src = branch.read(code.operand(0));
-		branch.write(code.target(), new Expr.Unary(Expr.Unary.Op.LENGTHOF, src,
-				attributes(branch)), code.assignedType());
+		transformUnary(Expr.Unary.Op.LENGTHOF,code,branch);		
 	}
 
 	protected void transform(Codes.Loop code, VcBranch branch) {
@@ -453,37 +380,15 @@ public class VcTransformer {
 	}
 
 	protected void transform(Codes.NewList code, VcBranch branch) {
-		int[] code_operands = code.operands();
-		Expr[] vals = new Expr[code_operands.length];
-		for (int i = 0; i != vals.length; ++i) {
-			vals[i] = branch.read(code_operands[i]);
-		}
-		branch.write(code.target(), new Expr.Nary(Expr.Nary.Op.LIST, vals,
-				attributes(branch)), code.assignedType());
+		transformNary(Expr.Nary.Op.LIST,code,branch);
 	}
 
 	protected void transform(Codes.NewSet code, VcBranch branch) {
-		int[] code_operands = code.operands();
-		Expr[] vals = new Expr[code_operands.length];
-		for (int i = 0; i != vals.length; ++i) {
-			vals[i] = branch.read(code_operands[i]);
-		}
-		branch.write(code.target(), new Expr.Nary(Expr.Nary.Op.SET, vals,
-				attributes(branch)), code.assignedType());
+		transformNary(Expr.Nary.Op.SET,code,branch);
 	}
 
 	protected void transform(Codes.NewRecord code, VcBranch branch) {
-		int[] code_operands = code.operands();
-		Type.Record type = code.type();
-		ArrayList<String> fields = new ArrayList<String>(type.fields().keySet());
-		Collections.sort(fields);
-		Expr[] vals = new Expr[fields.size()];
-		for (int i = 0; i != fields.size(); ++i) {
-			vals[i] = branch.read(code_operands[i]);
-		}
-
-		branch.write(code.target(), new Expr.Nary(Expr.Nary.Op.TUPLE, vals,
-				attributes(branch)), code.assignedType());
+		transformNary(Expr.Nary.Op.TUPLE,code,branch);
 	}
 
 	protected void transform(Codes.NewObject code, VcBranch branch) {
@@ -492,13 +397,7 @@ public class VcTransformer {
 	}
 
 	protected void transform(Codes.NewTuple code, VcBranch branch) {
-		int[] code_operands = code.operands();
-		Expr[] vals = new Expr[code_operands.length];
-		for (int i = 0; i != vals.length; ++i) {
-			vals[i] = branch.read(code_operands[i]);
-		}
-		branch.write(code.target(), new Expr.Nary(Expr.Nary.Op.TUPLE, vals,
-				attributes(branch)), code.assignedType());
+		transformNary(Expr.Nary.Op.TUPLE,code,branch);		
 	}
 
 	protected void transform(Codes.Nop code, VcBranch branch) {
@@ -510,21 +409,11 @@ public class VcTransformer {
 	}
 
 	protected void transform(Codes.SubString code, VcBranch branch) {
-		Expr src = branch.read(code.operands()[0]);
-		Expr start = branch.read(code.operands()[1]);
-		Expr end = branch.read(code.operands()[2]);
-		Expr result = new Expr.Ternary(Expr.Ternary.Op.SUBLIST, src, start, end,
-				attributes(branch));
-		branch.write(code.target(), result, code.assignedType());
+		transformTernary(Expr.Ternary.Op.SUBLIST,code,branch);		
 	}
 
 	protected void transform(Codes.SubList code, VcBranch branch) {
-		Expr src = branch.read(code.operands()[0]);
-		Expr start = branch.read(code.operands()[1]);
-		Expr end = branch.read(code.operands()[2]);
-		Expr result = new Expr.Ternary(Expr.Ternary.Op.SUBLIST, src, start,
-				end, attributes(branch));
-		branch.write(code.target(), result, code.assignedType());
+		transformTernary(Expr.Ternary.Op.SUBLIST,code,branch);		
 	}
 
 	protected void transform(Codes.Switch code, VcBranch defaultCase,
@@ -550,9 +439,7 @@ public class VcTransformer {
 
 	protected void transform(Codes.UnaryOperator code, VcBranch branch) {
 		if (code.kind == Codes.UnaryOperatorKind.NEG) {
-			Expr operand = branch.read(code.operand(0));
-			branch.write(code.target(), new Expr.Unary(Expr.Unary.Op.NEG,
-					operand, attributes(branch)), code.assignedType());
+			transformUnary(Expr.Unary.Op.NEG,code,branch);			
 		} else {
 			// TODO
 			branch.invalidate(code.target(),code.type());
@@ -611,6 +498,86 @@ public class VcTransformer {
 		}
 	}
 
+	/**
+	 * Transform an assignable unary bytecode using a given target operator.
+	 * This must read the operand and then create the appropriate target
+	 * expression. Finally, the result of the bytecode must be written back to
+	 * the enclosing branch.
+	 * 
+	 * @param operator --- The target operator
+	 * @param code --- The bytecode being translated
+	 * @param branch --- The enclosing branch
+	 */
+	protected void transformUnary(Expr.Unary.Op operator,
+			Code.AbstractUnaryAssignable code, VcBranch branch) {
+		Expr lhs = branch.read(code.operand(0));
+
+		branch.write(code.target(), new Expr.Unary(operator, lhs,
+				attributes(branch)), code.assignedType());
+	}
+	
+	/**
+	 * Transform an assignable binary bytecode using a given target operator.
+	 * This must read both operands and then create the appropriate target
+	 * expression. Finally, the result of the bytecode must be written back to
+	 * the enclosing branch.
+	 * 
+	 * @param operator --- The target operator
+	 * @param code --- The bytecode being translated
+	 * @param branch --- The enclosing branch
+	 */
+	protected void transformBinary(Expr.Binary.Op operator,
+			Code.AbstractBinaryAssignable code, VcBranch branch) {
+		Expr lhs = branch.read(code.operand(0));
+		Expr rhs = branch.read(code.operand(1));
+
+		branch.write(code.target(), new Expr.Binary(operator, lhs, rhs,
+				attributes(branch)), code.assignedType());
+	}
+	
+	/**
+	 * Transform an assignable ternary bytecode using a given target operator.
+	 * This must read all operands and then create the appropriate target
+	 * expression. Finally, the result of the bytecode must be written back to
+	 * the enclosing branch.
+	 * 
+	 * @param operator --- The target operator
+	 * @param code --- The bytecode being translated
+	 * @param branch --- The enclosing branch
+	 */
+	protected void transformTernary(Expr.Ternary.Op operator,
+			Code.AbstractNaryAssignable code, VcBranch branch) {
+		Expr one = branch.read(code.operand(0));
+		Expr two = branch.read(code.operand(1));
+		Expr three = branch.read(code.operand(2));		
+		branch.write(code.target(), new Expr.Ternary(operator, one, two, three,
+				attributes(branch)), code.assignedType());
+	}
+	
+	/**
+	 * Transform an assignable nary bytecode using a given target operator. This
+	 * must read all operands and then create the appropriate target
+	 * expression. Finally, the result of the bytecode must be written back to
+	 * the enclosing branch.
+	 * 
+	 * @param operator
+	 *            --- The target operator
+	 * @param code
+	 *            --- The bytecode being translated
+	 * @param branch
+	 *            --- The enclosing branch
+	 */
+	protected void transformNary(Expr.Nary.Op operator,
+			Code.AbstractNaryAssignable code, VcBranch branch) {
+		int[] code_operands = code.operands();
+		Expr[] vals = new Expr[code_operands.length];
+		for (int i = 0; i != vals.length; ++i) {
+			vals[i] = branch.read(code_operands[i]);
+		}
+		branch.write(code.target(), new Expr.Nary(operator, vals,
+				attributes(branch)), code.assignedType());
+	}
+	
 	protected List<AttributedCodeBlock> findPrecondition(NameID name, Type.FunctionOrMethod fun,
 			VcBranch branch) throws Exception {
 		Path.Entry<WyilFile> e = builder.project().get(name.module(),
