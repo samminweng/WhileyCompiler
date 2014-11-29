@@ -85,7 +85,7 @@ public class VcTransformer {
 	public void end(VcBranch.ForScope scope, VcBranch branch) {
 		// we need to build up a quantified formula here.
 
-		Expr root = and(scope.constraints,attributes(branch));
+		Expr root = and(scope.constraints);
 
 		SyntacticType type = convert(scope.loop.type.element(), branch);
 		TypePattern var;
@@ -123,7 +123,7 @@ public class VcTransformer {
 
 	public void exit(VcBranch.ForScope scope,
 			VcBranch branch) {
-		Expr root = and(scope.constraints, attributes(branch));
+		Expr root = and(scope.constraints);
 		SyntacticType type = convert(scope.loop.type.element(), branch);
 		TypePattern var;
 		Expr varExpr;
@@ -411,7 +411,7 @@ public class VcTransformer {
 					types[i+1] = paramTypes.get(i);
 				}
 				types[0] = branch.typeOf(code.target());
-				for(CodeBlock postcondition : ensures) {
+				for (AttributedCodeBlock postcondition : ensures) {
 					Expr constraint = transformExternalBlock(postcondition,
 							arguments, types, branch);
 					// assume the post condition holds
@@ -618,7 +618,7 @@ public class VcTransformer {
 		if (e == null) {
 			syntaxError(
 					errorMessage(ErrorMessages.RESOLUTION_ERROR, name.module()
-							.toString()), filename, attributes);
+							.toString()), filename, branch.attributes());
 		}
 		WyilFile m = e.read();
 		WyilFile.FunctionOrMethodDeclaration method = m.functionOrMethod(name.name(), fun);
@@ -638,7 +638,7 @@ public class VcTransformer {
 		if (e == null) {
 			syntaxError(
 					errorMessage(ErrorMessages.RESOLUTION_ERROR, name.module()
-							.toString()), filename, elem);
+							.toString()), filename, branch.attributes());
 		}
 		WyilFile m = e.read();
 		WyilFile.FunctionOrMethodDeclaration method = m.functionOrMethod(
@@ -670,7 +670,7 @@ public class VcTransformer {
 	 *            placed.
 	 * @return
 	 */
-	protected Expr transformExternalBlock(CodeBlock externalBlock,
+	protected Expr transformExternalBlock(AttributedCodeBlock externalBlock,
 			Expr[] operands, Type[] types, VcBranch branch) {
 
 		// first, generate a constraint representing the post-condition.
@@ -904,8 +904,8 @@ public class VcTransformer {
 					test.leftOperand, test.rightOperand, test.attributes()),
 					test.attributes());
 		default:
-			internalFailure("unknown comparator (" + test.op + ")", filename,
-					test);
+			wycc.lang.SyntaxError.internalFailure("unknown comparator ("
+					+ test.op + ")", filename, test);
 			return null;
 		}
 
@@ -997,7 +997,7 @@ public class VcTransformer {
 			return wycs.core.Value.Tuple(values);
 		} else {
 			internalFailure("unknown constant encountered (" + c + ")",
-					filename, elem);
+					filename, branch.attributes());
 			return null;
 		}
 	}
@@ -1098,7 +1098,7 @@ public class VcTransformer {
 		}
 	}
 
-	private Expr and(List<Expr> constraints, AttributedCodeBlock.Entry entry) {
+	private Expr and(List<Expr> constraints) {
 		if(constraints.size() == 0) {
 			return new Expr.Constant(Value.Bool(true));
 		} else if(constraints.size() == 1) {

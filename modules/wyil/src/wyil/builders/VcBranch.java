@@ -405,8 +405,7 @@ public class VcBranch {
 			}
 
 			// second, continue to transform the given bytecode
-			CodeBlock.Entry entry = block.getEntry(pc);
-			Code code = entry.code;
+			Code code = block.get(pc);
 			if(code instanceof Codes.Goto) {
 				goTo(((Codes.Goto) code).target);
 			} else if(code instanceof Codes.If) {
@@ -478,18 +477,6 @@ public class VcBranch {
 						Collections.EMPTY_LIST));
 
 				transformer.transform(loop, this);
-			} else if(code instanceof Codes.LoopEnd) {
-				top = scopes.size() - 1;
-				LoopScope ls = (LoopScope) scopes.get(top);
-				scopes.remove(top);
-				if(ls instanceof ForScope) {
-					ForScope fs = (ForScope) ls;
-					transformer.end(fs,this);
-				} else {
-					// normal loop, so the branch ends here
-					transformer.end(ls,this);
-					break;
-				}
 			} else if(code instanceof Codes.AssertOrAssume) {
 				Codes.AssertOrAssume ac = (Codes.AssertOrAssume) code;
 				boolean isAssertion = code instanceof Codes.Assert;
@@ -499,9 +486,6 @@ public class VcBranch {
 			} else if(code instanceof Codes.Return) {
 				transformer.transform((Codes.Return) code, this);
 				kill();
-				break; // we're done!!!
-			} else if(code instanceof Codes.Throw) {
-				transformer.transform((Codes.Throw) code, this);
 				break; // we're done!!!
 			} else if(code instanceof Codes.Fail) {
 				transformer.transform((Codes.Fail) code, this);
@@ -754,7 +738,7 @@ public class VcBranch {
 	 * @return
 	 */
 	private void dispatch(VcTransformer transformer) {
-		Code code = entry().code;
+		Code code = block.get(pc);
 		try {
 			if(code instanceof Codes.BinaryOperator) {
 				transformer.transform((Codes.BinaryOperator)code,this);
@@ -812,45 +796,21 @@ public class VcBranch {
 				transformer.transform((Codes.SubString)code,this);
 			} else if(code instanceof Codes.NewObject) {
 				transformer.transform((Codes.NewObject)code,this);
-			} else if(code instanceof Codes.Throw) {
-				transformer.transform((Codes.Throw)code,this);
 			} else if(code instanceof Codes.TupleLoad) {
 				transformer.transform((Codes.TupleLoad)code,this);
 			} else {
 				internalFailure("unknown: " + code.getClass().getName(),
-						transformer.filename(), entry());
+						transformer.filename(), attributes());
 			}
 		} catch(InternalFailure e) {
 			throw e;
 		} catch(SyntaxError e) {
 			throw e;
 		} catch(Throwable e) {
-			internalFailure(e.getMessage(), transformer.filename(), entry(), e);
+			internalFailure(e.getMessage(), transformer.filename(), e, attributes());
 		}
 	}
-
-	/**
-	 * Dispatch exit scope events to the transformer.
-	 *
-	 * @param scope
-	 * @param transformer
-	 */
-	private void dispatchExit(Scope scope, VcTransformer transformer) {
-		if (scope instanceof ForScope) {
-			ForScope fs = (ForScope) scope;
-			transformer.exit(fs, this);
-		} else if (scope instanceof LoopScope) {
-			LoopScope ls = (LoopScope) scope;
-			transformer.exit(ls, this);
-		} else if (scope instanceof TryScope) {
-			TryScope ls = (TryScope) scope;
-			transformer.exit(ls, this);
-		} else {
-			AssertOrAssumeScope ls = (AssertOrAssumeScope) scope;
-			transformer.exit(ls, this);
-		}
-	}
-
+	
 	/**
 	 * Reposition the Program Counter (PC) for this branch to a given label in
 	 * the block.
