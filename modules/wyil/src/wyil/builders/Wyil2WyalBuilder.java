@@ -172,13 +172,13 @@ public class Wyil2WyalBuilder implements Builder {
 				precond.write(i, master.read(i), master.typeOf(i));
 			}
 
-			Expr constraint = precond.transform(new VcTransformer(this,
+			Expr constraint = precond.transform(new VcGenerator(this,
 					wycsFile, filename, true));
 
 			precond.scopes.remove(precond.scopes.size()-1);
 			master.add(constraint);
 		}
 
-		master.transform(new VcTransformer(this, wycsFile, filename, false));
+		master.transform(new VcGenerator(this, wycsFile, filename, false));
 	}
 }

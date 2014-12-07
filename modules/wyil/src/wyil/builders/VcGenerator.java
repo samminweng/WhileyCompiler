@@ -33,7 +33,6 @@ import java.util.*;
 import wyautl.util.BigRational;
 import wybs.lang.*;
 import wyfs.lang.Path;
-import wyil.builders.VcBranch.AssertOrAssumeScope;
 import wyil.lang.*;
 import wyil.util.AttributedCodeBlock;
 import wyil.util.ErrorMessages;
@@ -52,13 +51,21 @@ import wycs.syntax.*;
  * @author David J. Pearce
  *
  */
-public class VcTransformer {
+public class VcGenerator {
 	private final Builder builder;
 	private final WyalFile wycsFile;
 	private final String filename;
 	private final boolean assume;
+	
+	/**
+	 * The root block of Wyil bytecode instructions which this branch is
+	 * traversing (note: <code>parent == null || block == parent.block</code>
+	 * must hold).
+	 */
+	private final AttributedCodeBlock block;
 
-	public VcTransformer(Builder builder, WyalFile wycsFile,
+
+	public VcGenerator(Builder builder, WyalFile wycsFile,
 			String filename, boolean assume) {
 		this.builder = builder;
 		this.filename = filename;
@@ -70,103 +77,370 @@ public class VcTransformer {
 		return filename;
 	}
 
-	public void end(VcBranch.LoopScope scope,
-			VcBranch branch) {
-		// not sure what really needs to be done here, in fact.
-	}
-
-	public void exit(VcBranch.LoopScope scope,
-			VcBranch branch) {
-		branch.addAll(scope.constraints);
-	}
-
 	private static int indexCount = 0;
 
-	public void end(VcBranch.ForScope scope, VcBranch branch) {
-		// we need to build up a quantified formula here.
+	// ===============================================================================
+	// Block controller
+	// ===============================================================================
+	
+	/**
+	 * <p>
+	 * Transform a given vc branch over a block of zero or more statements. In
+	 * the case of a straight-line sequence, this is guaranteed to produce at
+	 * most one outgoing branch (zero is possible if sequence includes a
+	 * return). For an instruction sequence with one or more conditional
+	 * branches, multiple branches may be produced representing the different
+	 * possible traversals.
+	 * </p>
+	 * <p>
+	 * This function symbolically executes each branch it is maintaining until
+	 * it either terminates (e.g. returns), or leaves the block.
+	 * </p>
+	 * 
+	 * @param index
+	 *            The index in the root block of the given block.
+	 * @param block
+	 *            The block being transformed over.
+	 * @param entryState
+	 *            the initial state on entry to the block. This is assumed to be
+	 *            located at the first instruction of the block.
+	 * 
+	 */
+	protected List<VcBranch> transform(CodeBlock.Index parent, CodeBlock block, VcBranch entryState) {
+		ArrayList<VcBranch> branches = new ArrayList<VcBranch>();
+		branches.add(entryState);
+		
+		for(int i=0;i!=branches.size();++i) {
+			VcBranch branch = branches.get(i);
+			
+			// The program counter represents the current position of the branch
+			// being explored. 
+			CodeBlock.Index pc = branch.pc();
+			
+			// Execute this branch provided it is still within the parent block.
+			// If it is outside of this block, then that means it has branched
+			// to an enclosing block. 			
+			while(pc.isWithin(parent)) {
+				
+				// FIXME: there is a bug here when a bytecode goes over the end
+				// of the block. 
+				
+				Code code = block.get(branch.pc());
+				// Now, dispatch statements. Control statements are treated
+				// specially from unit statements.
+				if (code instanceof Codes.Goto) {
+					transform((Codes.Goto) code,branch,branches);
+				} else if (code instanceof Codes.If) {
+					transform((Codes.If) code,branch,branches);
+				} else if (code instanceof Codes.IfIs) {
+					transform((Codes.IfIs) code,branch,branches);
+				} else if (code instanceof Codes.Switch) {
+					transform((Codes.Switch) code,branch,branches);
+				} else if (code instanceof Codes.ForAll) {
+					transform((Codes.ForAll) code,branch,branches);
+				} else if (code instanceof Codes.Loop) {
+					transform((Codes.Loop) code,branch,branches);
+				} else if (code instanceof Codes.Return) {
+					transform((Codes.Return) code,branch,branches);
+				} else if (code instanceof Codes.Fail) {
+					transform((Codes.Fail) code,branch,branches);
+				} else {
+					// Unit statement
+					transform(code,branch);
+					gotoNext(branch);
+				}
+			}
+		}
+		
+		return branches;
+	}
+	
+	// ===============================================================================
+	// Control Bytecodes
+	// ===============================================================================
+	
 
-		Expr root = and(scope.constraints);
-
-		SyntacticType type = convert(scope.loop.type.element(), branch);
-		TypePattern var;
-		Expr varExpr;
-
-		if (scope.loop.type instanceof Type.EffectiveList) {
-			// FIXME: hack to work around limitations of whiley for
-			// loops.
-			Expr.Variable idx = new Expr.Variable("i" + indexCount++);
-			Expr.Variable tmp = new Expr.Variable("_"
-					+ scope.index.name);
-			varExpr = new Expr.Nary(Expr.Nary.Op.TUPLE, new Expr[] {idx,tmp});
-			TypePattern tp1 = new TypePattern.Leaf(new SyntacticType.Int(), idx);
-			TypePattern tp2 = new TypePattern.Leaf(type, tmp);
-			var = new TypePattern.Tuple(new TypePattern[] { tp1, tp2 });
-		} else {
-			varExpr = new Expr.Variable("_" + scope.index.name);
-			var = new TypePattern.Leaf(type, (Expr.Variable) varExpr);
+	/**
+	 * <p>
+	 * Transform a branch through a loop bytecode. This is done by splitting the
+	 * entry branch into the case for the loop body, and the case for the loop
+	 * after. First, modified variables are invalidated to disconnect them from
+	 * information which held before the loop. Second, the loop invariant is
+	 * assumed as this provides the only information known about modified
+	 * variables.
+	 * </p>
+	 * 
+	 * <p>
+	 * For the case of the loop body, there are several scenarios. For branches
+	 * which make it to the end of the body, the loop invariant must be
+	 * reestablished. For branches which exit the loop, these are then folded
+	 * into enclosing scope.
+	 * </p>
+	 * 
+	 * @param code
+	 *            The bytecode being transformed.
+	 * @param branch
+	 *            The branch which holds on entry to the bytecode.
+	 * @param branches
+	 *            The list of branches currently being managed.
+	 */
+	protected void transform(Codes.Loop code, VcBranch branch, List<VcBranch> branches) {
+		
+		// First, havoc all variables which are modified in the loop.
+		for (int i : code.modifiedOperands) {
+			branch.invalidate(i,branch.typeOf(i));
 		}
 
-		// Now, we have to rename the index variable in the soon-to-be
-		// quantified expression. This is necessary to prevent conflicts with
-		// same-named registers used later in the method.
-		HashMap<String,Expr> binding = new HashMap<String,Expr>();
-		binding.put(scope.index.name, new Expr.Variable("_" + scope.index.name));
-		root = root.substitute(binding);
-
-		// since index is used, we need to imply that it is
-		// contained in the source expression.
-		root = new Expr.Binary(Expr.Binary.Op.IMPLIES, new Expr.Binary(
-				Expr.Binary.Op.IN, varExpr, scope.source), root);
-
-		branch.add(new Expr.ForAll(var, root, attributes(branch)));
 	}
 
-	public void exit(VcBranch.ForScope scope,
-			VcBranch branch) {
-		Expr root = and(scope.constraints);
-		SyntacticType type = convert(scope.loop.type.element(), branch);
-		TypePattern var;
-		Expr varExpr;
-
-		if (scope.loop.type instanceof Type.EffectiveList) {
-			// FIXME: hack to work around limitations of whiley for
-			// loops.
-			Expr.Variable idx = new Expr.Variable("i" + indexCount++);
-			Expr.Variable tmp = new Expr.Variable("_"
-					+ scope.index.name);
-			varExpr = new Expr.Nary(Expr.Nary.Op.TUPLE, new Expr[] {idx,tmp});
-			TypePattern tp1 = new TypePattern.Leaf(new SyntacticType.Int(), idx);
-			TypePattern tp2 = new TypePattern.Leaf(type, tmp);
-			var = new TypePattern.Tuple(new TypePattern[] { tp1, tp2 });
-		} else {
-			varExpr = new Expr.Variable("_" + scope.index.name);
-			var = new TypePattern.Leaf(type, (Expr.Variable) varExpr);
+	/**
+	 * <p>
+	 * Transform a branch through a loop bytecode. This is done by splitting the
+	 * entry branch into the case for the loop body, and the case for the loop
+	 * after. First, modified variables are invalidated to disconnect them from
+	 * information which held before the loop. Second, the loop invariant is
+	 * assumed as this provides the only information known about modified
+	 * variables.
+	 * </p>
+	 * 
+	 * <p>
+	 * For the case of the loop body, there are several scenarios. For branches
+	 * which make it to the end of the body, the loop invariant must be
+	 * reestablished. For branches which exit the loop, these are then folded
+	 * into enclosing scope.
+	 * </p>
+	 * 
+	 * @param code
+	 *            The bytecode being transformed.
+	 * @param branch
+	 *            The branch which holds on entry to the bytecode.
+	 * @param branches
+	 *            The list of branches currently being managed.
+	 */
+	protected void transform(Codes.ForAll code, VcBranch branch, List<VcBranch> branches) {
+		
+		// First, havoc all variables which are modified in the loop.
+		for (int i : code.modifiedOperands) {
+			branch.invalidate(i,branch.typeOf(i));
 		}
 
-		// Now, we have to rename the index variable in the soon-to-be
-		// quantified expression. This is necessary to prevent conflicts with
-		// same-named registers used later in the method.
-		HashMap<String,Expr> binding = new HashMap<String,Expr>();
-		binding.put(scope.index.name, new Expr.Variable("_" + scope.index.name));
-		root = root.substitute(binding);
+		Expr.Variable var = branch.invalidate(code.indexOperand,code.type.element());
 
-		// since index is used, we need to imply that it is
-		// contained in the source expression.
-		root = new Expr.Binary(Expr.Binary.Op.AND, new Expr.Binary(
-				Expr.Binary.Op.IN, varExpr, scope.source), root);
 
-		branch.add(new Expr.Exists(var, root, attributes(branch)));
+	}
+	
+	/**
+	 * <p>
+	 * Transform a branch through a conditional bytecode. This is done by
+	 * splitting the entry branch into the case for the true branch and the case
+	 * for the false branch. Control then continues down each branch.
+	 * </p>
+	 * <p>
+	 * On the true branch, the condition is assumed to hold. In contrast, the
+	 * condition's inverse is assumed to hold on the false branch.
+	 * </p>
+	 * 
+	 * @param code
+	 *            The bytecode being transformed.
+	 * @param branch
+	 *            The branch which holds on entry to the bytecode.
+	 * @param branches
+	 *            The list of branches currently being managed.
+	 */
+	protected void transform(Codes.If code, VcBranch branch, List<VcBranch> branches) {
+		// First, clone and register the branch
+		VcBranch trueBranch = branch.fork();
+		branches.add(trueBranch);		
+		// Second assume the condition on each branch
+		Expr.Binary trueTest = buildTest(code.op, code.leftOperand,
+				code.rightOperand, code.type, trueBranch);
+		trueBranch.assume(trueTest);
+		branch.assume(invert(trueTest));
+		// Finally dispacth the branches
+		gotoNext(branch);
+		gotoLabel(code.target,branch);
 	}
 
-	public void exit(VcBranch.AssertOrAssumeScope scope,
-			VcBranch branch) {
-		branch.addAll(scope.constraints);
+	/**
+	 * <p>
+	 * Transform a branch through a conditional bytecode. This is done by
+	 * splitting the entry branch into the case for the true branch and the case
+	 * for the false branch. Control then continues down each branch.
+	 * </p>
+	 * <p>
+	 * On the true branch, the condition is assumed to hold. In contrast, the
+	 * condition's inverse is assumed to hold on the false branch.
+	 * </p>
+	 * 
+	 * @param code
+	 *            The bytecode being transformed.
+	 * @param branch
+	 *            The branch which holds on entry to the bytecode.
+	 * @param branches
+	 *            The list of branches currently being managed.
+	 */
+	protected void transform(Codes.IfIs code, VcBranch branch, List<VcBranch> branches) {
+		Type type = branch.typeOf(code.operand);
+		// First, determine the true test
+		Type trueType = Type.intersect(type,code.rightOperand);
+		Type falseType = Type.intersect(type,Type.Negation(code.rightOperand));
+
+		if(trueType.equals(Type.T_VOID)) {
+			// This indicate that the true branch is unreachable and
+			// should not be explored. Observe that this does not mean
+			// the true branch is dead-code. Rather, since we're
+			// preforming a path-sensitive traversal it means we've
+			// uncovered an unreachable path. In this case, this branch
+			// remains as the false branch.
+			branch.write(code.operand, branch.read(code.operand), falseType);
+		} else if(falseType.equals(Type.T_VOID)) {
+			// This indicate that the false branch is unreachable (ditto
+			// as for true branch). In this case, this branch becomes
+			// the true branch.
+			branch.write(code.operand, branch.read(code.operand), trueType);
+			gotoLabel(code.target,branch);
+		} else {
+			// In this case, both branches are reachable.
+			// First, clone and register the branch
+			VcBranch trueBranch = branch.fork();
+			branches.add(trueBranch);		
+			// Second retype variables on each branch
+			branch.write(code.operand, branch.read(code.operand), falseType);
+			trueBranch.write(code.operand, branch.read(code.operand), trueType);
+			// Finally dispatch the branches
+			gotoNext(branch);
+			gotoLabel(code.target,branch);
+		}
+	}
+	
+	protected void transform(Codes.Switch code, VcBranch branch, List<VcBranch> branches) {
+		for(int i=0;i!=cases.length;++i) {
+			Constant caseValue = code.branches.get(i).first();
+			VcBranch branch = cases[i];
+			Collection<Attribute> attributes = attributes(branch);
+			Expr src = branch.read(code.operand);
+			Expr constant = new Expr.Constant(convert(caseValue, branch),attributes);
+			branch.add(new Expr.Binary(Expr.Binary.Op.EQ, src, constant, attributes));
+			defaultCase.add(new Expr.Binary(Expr.Binary.Op.NEQ, src, constant, attributes));
+		}
+	}
+	
+	protected void transform(Codes.Goto code, VcBranch branch, List<VcBranch> branches) {
+		gotoLabel(code.target,code);
 	}
 
-	protected void transform(Codes.AssertOrAssume code, VcBranch branch) {
-		// FIXME: do something here?
+	protected void transform(Codes.Fail code, VcBranch branch, List<VcBranch> branches) {
+		VcBranch.AssertOrAssumeScope scope = branch.topScope(VcBranch.AssertOrAssumeScope.class);
+
+		if (scope.isAssertion) {
+			Expr assumptions = branch.constraints();
+			Expr implication = new Expr.Binary(Expr.Binary.Op.IMPLIES,
+					assumptions, new Expr.Constant(Value.Bool(false),
+							attributes(branch)));
+			// build up list of used variables
+			HashSet<String> uses = new HashSet<String>();
+			implication.freeVariables(uses);
+			// Now, parameterise the assertion appropriately
+			Expr assertion = buildAssertion(0, implication, uses, branch);
+			wycsFile.add(wycsFile.new Assert(code.message.value, assertion,
+					attributes(branch)));
+		} else {
+			// do nothing?
+		}
 	}
 
+	protected void transform(Codes.Return code, VcBranch branch, List<VcBranch> branches) {
+		// FIXME
+	}
+
+
+	// ===============================================================================
+	// Unit Bytecodes
+	// ===============================================================================
+	
+	/**
+	 * Dispatch transform over unit bytecodes. Each unit bytecode is guaranteed
+	 * to continue afterwards, and not to fork any new branches.
+	 * 
+	 * @param code The bytecode being transformed over.
+	 * @param branch The branch on entry to the bytecode.
+	 */
+	protected void transform(Code code, VcBranch branch) {
+		try {
+			if (code instanceof Codes.LengthOf) {
+				transformUnary(Expr.Unary.Op.LENGTHOF,(Codes.LengthOf) code,branch);
+			} else if (code instanceof Codes.BinaryOperator) {
+				Codes.BinaryOperator bc = (Codes.BinaryOperator) code;
+				transformBinary(binaryOperatorMap[bc.kind.ordinal()], bc, branch);
+			} else if (code instanceof Codes.ListOperator) {
+				Codes.ListOperator bc = (Codes.ListOperator) code;
+				transformBinary(Expr.Binary.Op.LISTAPPEND, bc, branch);
+			} else if (code instanceof Codes.SetOperator) {
+				Codes.SetOperator bc = (Codes.SetOperator) code;
+				transformBinary(setOperatorMap[bc.kind.ordinal()], bc, branch);
+			} else if (code instanceof Codes.NewList) {
+				transformNary(Expr.Nary.Op.LIST,(Codes.NewList) code,branch);
+			} else if (code instanceof Codes.NewRecord) {
+				transformNary(Expr.Nary.Op.TUPLE,(Codes.NewTuple) code,branch);
+			} else if (code instanceof Codes.NewSet) {
+				transformNary(Expr.Nary.Op.SET,(Codes.NewSet) code,branch);
+			} else if (code instanceof Codes.NewTuple) {
+				transformNary(Expr.Nary.Op.TUPLE,(Codes.NewTuple) code,branch);
+			} else if (code instanceof Codes.Convert) {
+				transform((Codes.Convert) code, branch);
+			} else if (code instanceof Codes.Const) {
+				transform((Codes.Const) code, branch);
+			} else if (code instanceof Codes.Debug) {
+				// skip
+			} else if (code instanceof Codes.FieldLoad) {
+				transform((Codes.FieldLoad) code, branch);
+			} else if (code instanceof Codes.IndirectInvoke) {
+				transform((Codes.IndirectInvoke) code, branch);
+			} else if (code instanceof Codes.Invoke) {
+				transform((Codes.Invoke) code, branch);
+			} else if (code instanceof Codes.Invert) {
+				transform((Codes.Invert) code, branch);
+			} else if (code instanceof Codes.Label) {
+				// skip
+			} else if (code instanceof Codes.SubList) {
+				transform((Codes.SubList) code, branch);
+			} else if (code instanceof Codes.IndexOf) {
+				transform((Codes.IndexOf) code, branch);
+			} else if (code instanceof Codes.Move) {
+				transform((Codes.Move) code, branch);
+			} else if (code instanceof Codes.Assign) {
+				transform((Codes.Assign) code, branch);
+			} else if (code instanceof Codes.Update) {
+				transform((Codes.Update) code, branch);
+			} else if (code instanceof Codes.NewMap) {
+				transform((Codes.NewMap) code, branch);
+			}  else if (code instanceof Codes.UnaryOperator) {
+				transform((Codes.UnaryOperator) code, branch);
+			} else if (code instanceof Codes.Dereference) {
+				transform((Codes.Dereference) code, branch);
+			} else if (code instanceof Codes.Nop) {
+				// skip
+			} else if (code instanceof Codes.StringOperator) {
+				transform((Codes.StringOperator) code, branch);
+			} else if (code instanceof Codes.SubString) {
+				transform((Codes.SubString) code, branch);
+			} else if (code instanceof Codes.NewObject) {
+				transform((Codes.NewObject) code, branch);
+			} else if (code instanceof Codes.TupleLoad) {
+				transform((Codes.TupleLoad) code, branch);
+			} else {
+				internalFailure("unknown: " + code.getClass().getName(),
+						filename(), entry());
+			}
+		} catch (InternalFailure e) {
+			throw e;
+		} catch (SyntaxError e) {
+			throw e;
+		} catch (Throwable e) {
+			internalFailure(e.getMessage(), filename(), entry(), e);
+		}				
+	}
+	
 	protected void transform(Codes.Assign code, VcBranch branch) {
 		branch.write(code.target(), branch.read(code.operand(0)), code.assignedType());
 	}
@@ -181,16 +455,8 @@ public class VcTransformer {
 		Expr.Binary.Op.DIV,
 		Expr.Binary.Op.RANGE
 	};
-	
-	protected void transform(Codes.BinaryOperator code, VcBranch branch) {
-		transformBinary(binaryOperatorMap[code.kind.ordinal()], code, branch);
-	}
 
-	protected void transform(Codes.ListOperator code, VcBranch branch) {
-		transformBinary(Expr.Binary.Op.LISTAPPEND,code,branch);
-	}
-
-	/**
+		/**
 	 * Maps binary bytecodes into expression opcodes.
 	 */
 	private static Expr.Binary.Op[] setOperatorMap = {
@@ -199,10 +465,6 @@ public class VcTransformer {
 		Expr.Binary.Op.SETDIFFERENCE
 	};
 	
-	protected void transform(Codes.SetOperator code, VcBranch branch) {
-		transformBinary(setOperatorMap[code.kind.ordinal()], code, branch);
-	}
-
 	protected void transform(Codes.StringOperator code, VcBranch branch) {
 		Collection<Attribute> attributes = attributes(branch);
 		Expr lhs = branch.read(code.operand(0));
@@ -213,10 +475,10 @@ public class VcTransformer {
 			// do nothing
 			break;
 		case LEFT_APPEND:
-			rhs = new Expr.Nary(Expr.Nary.Op.LIST,new Expr[] { rhs }, attributes(branch));
+			rhs = new Expr.Nary(Expr.Nary.Op.LIST,new Expr[] { rhs }, attributes);
 			break;
 		case RIGHT_APPEND:
-			lhs = new Expr.Nary(Expr.Nary.Op.LIST,new Expr[] { lhs }, attributes(branch));
+			lhs = new Expr.Nary(Expr.Nary.Op.LIST,new Expr[] { lhs }, attributes);
 			break;
 		default:
 			internalFailure("unknown binary operator", filename,
@@ -251,47 +513,15 @@ public class VcTransformer {
 		branch.invalidate(code.target(),code.type());
 	}
 
-	protected void transform(Codes.Fail code, VcBranch branch) {
-		VcBranch.AssertOrAssumeScope scope = branch.topScope(VcBranch.AssertOrAssumeScope.class);
-
-		if (scope.isAssertion) {
-			Expr assumptions = branch.constraints();
-			Expr implication = new Expr.Binary(Expr.Binary.Op.IMPLIES,
-					assumptions, new Expr.Constant(Value.Bool(false),
-							attributes(branch)));
-			// build up list of used variables
-			HashSet<String> uses = new HashSet<String>();
-			implication.freeVariables(uses);
-			// Now, parameterise the assertion appropriately
-			Expr assertion = buildAssertion(0, implication, uses, branch);
-			wycsFile.add(wycsFile.new Assert(code.message.value, assertion,
-					attributes(branch)));
-		} else {
-			// do nothing?
-		}
-	}
-
 	protected void transform(Codes.FieldLoad code, VcBranch branch) {
-		Collection<Attribute> attributes = attributes(branch);
-		// Expr src = branch.read(code.operand);
-		// branch.write(code.target, Exprs.FieldOf(src, code.field,
-		// attributes));
 		ArrayList<String> fields = new ArrayList<String>(code.type().fields()
 				.keySet());
 		Collections.sort(fields);
 		Expr src = branch.read(code.operand(0));
-		Expr index = new Expr.Constant(Value.Integer(BigInteger.valueOf(fields.indexOf(code.field))));
+		Expr index = new Expr.Constant(Value.Integer(BigInteger.valueOf(fields
+				.indexOf(code.field))));
 		Expr result = new Expr.IndexOf(src, index, attributes(branch));
 		branch.write(code.target(), result, code.assignedType());
-	}
-
-	protected void transform(Codes.If code, VcBranch falseBranch,
-			VcBranch trueBranch) {
-		// First, cover true branch
-		Expr.Binary trueTest = buildTest(code.op, code.leftOperand,
-				code.rightOperand, code.type, trueBranch);
-		trueBranch.add(trueTest);
-		falseBranch.add(invert(trueTest));
 	}
 
 	protected void transform(Codes.IndirectInvoke code, VcBranch branch) {
@@ -362,14 +592,6 @@ public class VcTransformer {
 				attributes(branch)), code.assignedType());
 	}
 
-	protected void transform(Codes.LengthOf code, VcBranch branch) {
-		transformUnary(Expr.Unary.Op.LENGTHOF,code,branch);		
-	}
-
-	protected void transform(Codes.Loop code, VcBranch branch) {
-		// FIXME: assume loop invariant?
-	}
-
 	protected void transform(Codes.Move code, VcBranch branch) {
 		branch.write(code.target(), branch.read(code.operand(0)), code.assignedType());
 	}
@@ -379,33 +601,13 @@ public class VcTransformer {
 		branch.invalidate(code.target(),code.type());
 	}
 
-	protected void transform(Codes.NewList code, VcBranch branch) {
-		transformNary(Expr.Nary.Op.LIST,code,branch);
-	}
-
-	protected void transform(Codes.NewSet code, VcBranch branch) {
-		transformNary(Expr.Nary.Op.SET,code,branch);
-	}
-
-	protected void transform(Codes.NewRecord code, VcBranch branch) {
-		transformNary(Expr.Nary.Op.TUPLE,code,branch);
-	}
-
 	protected void transform(Codes.NewObject code, VcBranch branch) {
 		// TODO
 		branch.invalidate(code.target(),code.type());
 	}
 
-	protected void transform(Codes.NewTuple code, VcBranch branch) {
-		transformNary(Expr.Nary.Op.TUPLE,code,branch);		
-	}
-
 	protected void transform(Codes.Nop code, VcBranch branch) {
 		// do nout
-	}
-
-	protected void transform(Codes.Return code, VcBranch branch) {
-		// nothing to do
 	}
 
 	protected void transform(Codes.SubString code, VcBranch branch) {
@@ -414,19 +616,6 @@ public class VcTransformer {
 
 	protected void transform(Codes.SubList code, VcBranch branch) {
 		transformTernary(Expr.Ternary.Op.SUBLIST,code,branch);		
-	}
-
-	protected void transform(Codes.Switch code, VcBranch defaultCase,
-			VcBranch... cases) {
-		for(int i=0;i!=cases.length;++i) {
-			Constant caseValue = code.branches.get(i).first();
-			VcBranch branch = cases[i];
-			Collection<Attribute> attributes = attributes(branch);
-			Expr src = branch.read(code.operand);
-			Expr constant = new Expr.Constant(convert(caseValue, branch),attributes);
-			branch.add(new Expr.Binary(Expr.Binary.Op.EQ, src, constant, attributes));
-			defaultCase.add(new Expr.Binary(Expr.Binary.Op.NEQ, src, constant, attributes));
-		}
 	}
 
 	protected void transform(Codes.TupleLoad code, VcBranch branch) {
@@ -651,12 +840,26 @@ public class VcTransformer {
 			master.write(i, operands[i], types[i]);
 		}
 
-		Expr constraint = master.transform(new VcTransformer(builder, wycsFile,
+		Expr constraint = master.transform(new VcGenerator(builder, wycsFile,
 				filename, true));
 
 		return constraint;
 	}
-
+	
+	/**
+	 * Dispatch the branch to the next instruction in sequence. This can move
+	 * the branch passed the end of the sequence.
+	 * 
+	 * @param branch
+	 */
+	public void gotoNext(VcBranch branch) {
+		
+	}
+	
+	public void gotoLabel(String label, VcBranch branch) {
+		
+	}
+	
 	/**
 	 * Recursively descend the scope stack building up appropriate
 	 * parameterisation of the core assertion as we go.
