@@ -25,6 +25,8 @@
 
 package wyil.builders;
 
+import wycc.lang.SyntaxError.InternalFailure;
+import wycc.lang.SyntaxError;
 import static wyil.util.ErrorMessages.*;
 
 import java.math.BigInteger;
@@ -55,21 +57,19 @@ public class VcGenerator {
 	private final Builder builder;
 	private final WyalFile wycsFile;
 	private final String filename;
-	private final boolean assume;
 	
 	/**
 	 * The root block of Wyil bytecode instructions which this branch is
 	 * traversing (note: <code>parent == null || block == parent.block</code>
 	 * must hold).
 	 */
-	private final AttributedCodeBlock block;
+	private AttributedCodeBlock rootBlock;
 
 
 	public VcGenerator(Builder builder, WyalFile wycsFile,
-			String filename, boolean assume) {
+			String filename) {
 		this.builder = builder;
 		this.filename = filename;
-		this.assume = assume;
 		this.wycsFile = wycsFile;
 	}
 
@@ -129,21 +129,21 @@ public class VcGenerator {
 				// Now, dispatch statements. Control statements are treated
 				// specially from unit statements.
 				if (code instanceof Codes.Goto) {
-					transform((Codes.Goto) code,branch,branches);
+					transform((Codes.Goto) code,i,branches);
 				} else if (code instanceof Codes.If) {
-					transform((Codes.If) code,branch,branches);
+					transform((Codes.If) code,i,branches);
 				} else if (code instanceof Codes.IfIs) {
-					transform((Codes.IfIs) code,branch,branches);
+					transform((Codes.IfIs) code,i,branches);
 				} else if (code instanceof Codes.Switch) {
-					transform((Codes.Switch) code,branch,branches);
+					transform((Codes.Switch) code,i,branches);
 				} else if (code instanceof Codes.ForAll) {
-					transform((Codes.ForAll) code,branch,branches);
+					transform((Codes.ForAll) code,i,branches);
 				} else if (code instanceof Codes.Loop) {
-					transform((Codes.Loop) code,branch,branches);
+					transform((Codes.Loop) code,i,branches);
 				} else if (code instanceof Codes.Return) {
-					transform((Codes.Return) code,branch,branches);
+					transform((Codes.Return) code,i,branches);
 				} else if (code instanceof Codes.Fail) {
-					transform((Codes.Fail) code,branch,branches);
+					transform((Codes.Fail) code,i,branches);
 				} else {
 					// Unit statement
 					transform(code,branch);
@@ -179,12 +179,14 @@ public class VcGenerator {
 	 * 
 	 * @param code
 	 *            The bytecode being transformed.
-	 * @param branch
-	 *            The branch which holds on entry to the bytecode.
+	 * @param branchIndex
+	 *            The index of the branch (in branches) which holds on entry to
+	 *            the bytecode.
 	 * @param branches
 	 *            The list of branches currently being managed.
 	 */
-	protected void transform(Codes.Loop code, VcBranch branch, List<VcBranch> branches) {
+	protected void transform(Codes.Loop code, int branchIndex, List<VcBranch> branches) {
+		VcBranch branch = branches.get(branchIndex);
 		
 		// First, havoc all variables which are modified in the loop.
 		for (int i : code.modifiedOperands) {
@@ -212,12 +214,14 @@ public class VcGenerator {
 	 * 
 	 * @param code
 	 *            The bytecode being transformed.
-	 * @param branch
-	 *            The branch which holds on entry to the bytecode.
+	 * @param branchIndex
+	 *            The index of the branch (in branches) which holds on entry to
+	 *            the bytecode.
 	 * @param branches
 	 *            The list of branches currently being managed.
 	 */
-	protected void transform(Codes.ForAll code, VcBranch branch, List<VcBranch> branches) {
+	protected void transform(Codes.ForAll code, int branchIndex, List<VcBranch> branches) {
+		VcBranch branch = branches.get(branchIndex);
 		
 		// First, havoc all variables which are modified in the loop.
 		for (int i : code.modifiedOperands) {
@@ -242,12 +246,14 @@ public class VcGenerator {
 	 * 
 	 * @param code
 	 *            The bytecode being transformed.
-	 * @param branch
-	 *            The branch which holds on entry to the bytecode.
+	 * @param branchIndex
+	 *            The index of the branch (in branches) which holds on entry to
+	 *            the bytecode.
 	 * @param branches
 	 *            The list of branches currently being managed.
 	 */
-	protected void transform(Codes.If code, VcBranch branch, List<VcBranch> branches) {
+	protected void transform(Codes.If code, int branchIndex, List<VcBranch> branches) {
+		VcBranch branch = branches.get(branchIndex);
 		// First, clone and register the branch
 		VcBranch trueBranch = branch.fork();
 		branches.add(trueBranch);		
@@ -274,12 +280,14 @@ public class VcGenerator {
 	 * 
 	 * @param code
 	 *            The bytecode being transformed.
-	 * @param branch
-	 *            The branch which holds on entry to the bytecode.
+	 * @param branchIndex
+	 *            The index of the branch (in branches) which holds on entry to
+	 *            the bytecode.
 	 * @param branches
 	 *            The list of branches currently being managed.
 	 */
-	protected void transform(Codes.IfIs code, VcBranch branch, List<VcBranch> branches) {
+	protected void transform(Codes.IfIs code, int branchIndex, List<VcBranch> branches) {
+		VcBranch branch = branches.get(branchIndex);
 		Type type = branch.typeOf(code.operand);
 		// First, determine the true test
 		Type trueType = Type.intersect(type,code.rightOperand);
@@ -313,44 +321,131 @@ public class VcGenerator {
 		}
 	}
 	
-	protected void transform(Codes.Switch code, VcBranch branch, List<VcBranch> branches) {
-		for(int i=0;i!=cases.length;++i) {
-			Constant caseValue = code.branches.get(i).first();
-			VcBranch branch = cases[i];
-			Collection<Attribute> attributes = attributes(branch);
-			Expr src = branch.read(code.operand);
-			Expr constant = new Expr.Constant(convert(caseValue, branch),attributes);
-			branch.add(new Expr.Binary(Expr.Binary.Op.EQ, src, constant, attributes));
-			defaultCase.add(new Expr.Binary(Expr.Binary.Op.NEQ, src, constant, attributes));
+	/**
+	 * <p>
+	 * Transform a branch through a switch bytecode. This is done by splitting
+	 * the entry branch into separate branches for each case. The entry branch
+	 * then follows the default branch.
+	 * </p>
+	 * 
+	 * @param code
+	 *            The bytecode being transformed.
+	 * @param branchIndex
+	 *            The index of the branch (in branches) which holds on entry to
+	 *            the bytecode.
+	 * @param branches
+	 *            The list of branches currently being managed.
+	 */
+	protected void transform(Codes.Switch code, int branchIndex,
+			List<VcBranch> branches) {
+		VcBranch branch = branches.get(branchIndex);
+		// First, for each case fork a new branch to traverse it.
+		VcBranch[] cases = new VcBranch[code.branches.size()];
+		for (int i = 0; i != cases.length; ++i) {
+			cases[i] = branch.fork();
+			branches.add(cases[i]);
 		}
+
+		// Second, for each case, assume that the variable switched on matches
+		// the give case value. Likewise, assume that the default branch does
+		// *not* equal this value.
+		for (int i = 0; i != cases.length; ++i) {
+			Constant caseValue = code.branches.get(i).first();
+			// Second, on the new branch we need assume that the variable being
+			// switched on matches the given value.
+			Expr src = branch.read(code.operand);
+			Expr constant = new Expr.Constant(convert(caseValue, branch),
+					wycsAttributes(branch));
+			cases[i].assume(new Expr.Binary(Expr.Binary.Op.EQ, src, constant,
+					wycsAttributes(branch)));
+			// Third, on the default branch we can assume that the variable
+			// being switched is *not* the given value.
+			branch.assume(new Expr.Binary(Expr.Binary.Op.NEQ, src, constant,
+					wycsAttributes(branch)));
+		}
+
+		// Finally, the original entry branch now represents the default branch.
+		// Therefore, dispatch this to the default target.
+		gotoLabel(code.defaultTarget, branch);
 	}
 	
-	protected void transform(Codes.Goto code, VcBranch branch, List<VcBranch> branches) {
-		gotoLabel(code.target,code);
+	/**
+	 * <p>
+	 * Transform a branch through an unconditional branching bytecode. This is
+	 * pretty straightforward, and the branch is just directed to the given
+	 * location.
+	 * </p>
+	 * 
+	 * @param code
+	 *            The bytecode being transformed.
+	 * @param branchIndex
+	 *            The index of the branch (in branches) which holds on entry to
+	 *            the bytecode.
+	 * @param branches
+	 *            The list of branches currently being managed.
+	 */
+	protected void transform(Codes.Goto code, int branchIndex, List<VcBranch> branches) {
+		VcBranch branch = branches.get(branchIndex);
+		gotoLabel(code.target,branch);
 	}
 
-	protected void transform(Codes.Fail code, VcBranch branch, List<VcBranch> branches) {
-		VcBranch.AssertOrAssumeScope scope = branch.topScope(VcBranch.AssertOrAssumeScope.class);
-
-		if (scope.isAssertion) {
-			Expr assumptions = branch.constraints();
-			Expr implication = new Expr.Binary(Expr.Binary.Op.IMPLIES,
-					assumptions, new Expr.Constant(Value.Bool(false),
-							attributes(branch)));
-			// build up list of used variables
-			HashSet<String> uses = new HashSet<String>();
-			implication.freeVariables(uses);
-			// Now, parameterise the assertion appropriately
-			Expr assertion = buildAssertion(0, implication, uses, branch);
-			wycsFile.add(wycsFile.new Assert(code.message.value, assertion,
-					attributes(branch)));
-		} else {
-			// do nothing?
-		}
+	/**
+	 * <p>
+	 * Transform a branch through the special fail bytecode.  In the normal case,
+	 * we must establish this branch is unreachable. However, in the case that
+	 * we are within an enclosing assume statement, then we can simply discard
+	 * this branch.
+	 * </p>
+	 * 
+	 * @param code
+	 *            The bytecode being transformed.
+	 * @param branchIndex
+	 *            The index of the branch (in branches) which holds on entry to
+	 *            the bytecode.
+	 * @param branches
+	 *            The list of branches currently being managed.
+	 */
+	protected void transform(Codes.Fail code, int branchIndex, List<VcBranch> branches) {
+		VcBranch branch = branches.get(branchIndex);
+		// FIXME: 
+//		VcBranch.AssertOrAssumeScope scope = branch.topScope(VcBranch.AssertOrAssumeScope.class);
+//
+//		if (scope.isAssertion) {
+//			Expr assumptions = branch.constraints();
+//			Expr implication = new Expr.Binary(Expr.Binary.Op.IMPLIES,
+//					assumptions, new Expr.Constant(Value.Bool(false),
+//							attributes(branch)));
+//			// build up list of used variables
+//			HashSet<String> uses = new HashSet<String>();
+//			implication.freeVariables(uses);
+//			// Now, parameterise the assertion appropriately
+//			Expr assertion = buildAssertion(0, implication, uses, branch);
+//			wycsFile.add(wycsFile.new Assert(code.message.value, assertion,
+//					attributes(branch)));
+//		} else {
+//			// do nothing?
+//		}
 	}
 
-	protected void transform(Codes.Return code, VcBranch branch, List<VcBranch> branches) {
+	/**
+	 * <p>
+	 * Transform a branch through a return bytecode. In this case, we need to
+	 * ensure that the postcondition holds. After that, we can drop the branch
+	 * since it is completed.
+	 * </p>
+	 * 
+	 * @param code
+	 *            The bytecode being transformed.
+	 * @param branchIndex
+	 *            The index of the branch (in branches) which holds on entry to
+	 *            the bytecode.
+	 * @param branches
+	 *            The list of branches currently being managed.
+	 */
+	protected void transform(Codes.Return code, int branchIndex, List<VcBranch> branches) {
+		VcBranch branch = branches.get(branchIndex);
 		// FIXME
+		branches.set(branchIndex,null); // kill the branch!
 	}
 
 
@@ -430,14 +525,14 @@ public class VcGenerator {
 				transform((Codes.TupleLoad) code, branch);
 			} else {
 				internalFailure("unknown: " + code.getClass().getName(),
-						filename(), entry());
+						filename(), rootBlock.attributes(branch.pc()));
 			}
 		} catch (InternalFailure e) {
 			throw e;
 		} catch (SyntaxError e) {
 			throw e;
 		} catch (Throwable e) {
-			internalFailure(e.getMessage(), filename(), entry(), e);
+			internalFailure(e.getMessage(), filename(), e, rootBlock.attributes(branch.pc()));
 		}				
 	}
 	
@@ -466,7 +561,7 @@ public class VcGenerator {
 	};
 	
 	protected void transform(Codes.StringOperator code, VcBranch branch) {
-		Collection<Attribute> attributes = attributes(branch);
+		Collection<Attribute> attributes = wycsAttributes(branch);
 		Expr lhs = branch.read(code.operand(0));
 		Expr rhs = branch.read(code.operand(1));
 
@@ -482,14 +577,14 @@ public class VcGenerator {
 			break;
 		default:
 			internalFailure("unknown binary operator", filename,
-					branch.attributes());
+					rootBlock.attributes(branch.pc()));
 			return;
 		}
 
 		// TODO: after removing left append we can simplify this case.
 		
 		branch.write(code.target(), new Expr.Binary(Expr.Binary.Op.LISTAPPEND,
-				lhs, rhs, attributes(branch)), code.assignedType());
+				lhs, rhs, wycsAttributes(branch)), code.assignedType());
 	}
 
 	protected void transform(Codes.Convert code, VcBranch branch) {
@@ -500,7 +595,7 @@ public class VcGenerator {
 
 	protected void transform(Codes.Const code, VcBranch branch) {
 		Value val = convert(code.constant, branch);
-		branch.write(code.target(), new Expr.Constant(val, attributes(branch)),
+		branch.write(code.target(), new Expr.Constant(val, wycsAttributes(branch)),
 				code.assignedType());
 	}
 
@@ -520,7 +615,7 @@ public class VcGenerator {
 		Expr src = branch.read(code.operand(0));
 		Expr index = new Expr.Constant(Value.Integer(BigInteger.valueOf(fields
 				.indexOf(code.field))));
-		Expr result = new Expr.IndexOf(src, index, attributes(branch));
+		Expr result = new Expr.IndexOf(src, index, wycsAttributes(branch));
 		branch.write(code.target(), result, code.assignedType());
 	}
 
@@ -533,7 +628,7 @@ public class VcGenerator {
 
 	protected void transform(Codes.Invoke code, VcBranch branch)
 			throws Exception {
-		Collection<Attribute> attributes = attributes(branch);
+		Collection<Attribute> attributes = wycsAttributes(branch);
 		int[] code_operands = code.operands();
 		if (code.target() != Codes.NULL_REG) {
 			// Need to assume the post-condition holds.
@@ -574,7 +669,7 @@ public class VcGenerator {
 					Expr constraint = transformExternalBlock(postcondition,
 							arguments, types, branch);
 					// assume the post condition holds
-					branch.add(constraint);
+					branch.assume(constraint);
 				}
 			}
 		}
@@ -589,7 +684,7 @@ public class VcGenerator {
 		Expr src = branch.read(code.operand(0));
 		Expr idx = branch.read(code.operand(1));
 		branch.write(code.target(), new Expr.IndexOf(src, idx,
-				attributes(branch)), code.assignedType());
+				wycsAttributes(branch)), code.assignedType());
 	}
 
 	protected void transform(Codes.Move code, VcBranch branch) {
@@ -622,7 +717,7 @@ public class VcGenerator {
 		Expr src = branch.read(code.operand(0));
 		Expr index = new Expr.Constant(Value.Integer(BigInteger
 				.valueOf(code.index)));
-		Expr result = new Expr.IndexOf(src, index, attributes(branch));
+		Expr result = new Expr.IndexOf(src, index, wycsAttributes(branch));
 		branch.write(code.target(), result, code.assignedType());
 	}
 
@@ -647,7 +742,7 @@ public class VcGenerator {
 		if (!iter.hasNext()) {
 			return result;
 		} else {
-			Collection<Attribute> attributes = attributes(branch);
+			Collection<Attribute> attributes = wycsAttributes(branch);
 			Codes.LVal lv = iter.next();
 			if (lv instanceof Codes.RecordLVal) {
 				Codes.RecordLVal rlv = (Codes.RecordLVal) lv;
@@ -676,7 +771,7 @@ public class VcGenerator {
 				result = updateHelper(iter, new Expr.IndexOf(source, index,
 						attributes), result, branch);
 				return new Expr.Ternary(Expr.Ternary.Op.UPDATE, source, index,
-						result, attributes(branch));
+						result, wycsAttributes(branch));
 			} else if (lv instanceof Codes.MapLVal) {
 				return source; // TODO
 			} else if (lv instanceof Codes.StringLVal) {
@@ -702,7 +797,7 @@ public class VcGenerator {
 		Expr lhs = branch.read(code.operand(0));
 
 		branch.write(code.target(), new Expr.Unary(operator, lhs,
-				attributes(branch)), code.assignedType());
+				wycsAttributes(branch)), code.assignedType());
 	}
 	
 	/**
@@ -721,7 +816,7 @@ public class VcGenerator {
 		Expr rhs = branch.read(code.operand(1));
 
 		branch.write(code.target(), new Expr.Binary(operator, lhs, rhs,
-				attributes(branch)), code.assignedType());
+				wycsAttributes(branch)), code.assignedType());
 	}
 	
 	/**
@@ -740,7 +835,7 @@ public class VcGenerator {
 		Expr two = branch.read(code.operand(1));
 		Expr three = branch.read(code.operand(2));		
 		branch.write(code.target(), new Expr.Ternary(operator, one, two, three,
-				attributes(branch)), code.assignedType());
+				wycsAttributes(branch)), code.assignedType());
 	}
 	
 	/**
@@ -764,7 +859,7 @@ public class VcGenerator {
 			vals[i] = branch.read(code_operands[i]);
 		}
 		branch.write(code.target(), new Expr.Nary(operator, vals,
-				attributes(branch)), code.assignedType());
+				wycsAttributes(branch)), code.assignedType());
 	}
 	
 	protected List<AttributedCodeBlock> findPrecondition(NameID name, Type.FunctionOrMethod fun,
@@ -774,7 +869,8 @@ public class VcGenerator {
 		if (e == null) {
 			syntaxError(
 					errorMessage(ErrorMessages.RESOLUTION_ERROR, name.module()
-							.toString()), filename, branch.attributes());
+							.toString()), filename, rootBlock.attributes(branch
+							.pc()));
 		}
 		WyilFile m = e.read();
 		WyilFile.FunctionOrMethodDeclaration method = m.functionOrMethod(name.name(), fun);
@@ -794,7 +890,7 @@ public class VcGenerator {
 		if (e == null) {
 			syntaxError(
 					errorMessage(ErrorMessages.RESOLUTION_ERROR, name.module()
-							.toString()), filename, branch.attributes());
+							.toString()), filename, rootBlock.attributes(branch.pc()));
 		}
 		WyilFile m = e.read();
 		WyilFile.FunctionOrMethodDeclaration method = m.functionOrMethod(
@@ -1023,11 +1119,11 @@ public class VcGenerator {
 			break;
 		default:
 			internalFailure("unknown comparator (" + cop + ")", filename,
-					branch.attributes());
+					rootBlock.attributes(branch.pc()));
 			return null;
 		}
 
-		return new Expr.Binary(op, lhs, rhs, attributes(branch));
+		return new Expr.Binary(op, lhs, rhs, wycsAttributes(branch));
 	}
 
 	/**
@@ -1167,7 +1263,7 @@ public class VcGenerator {
 			return wycs.core.Value.Tuple(values);
 		} else {
 			internalFailure("unknown constant encountered (" + c + ")",
-					filename, branch.attributes());
+					filename, rootBlock.attributes(branch.pc()));
 			return null;
 		}
 	}
@@ -1185,31 +1281,31 @@ public class VcGenerator {
 		// FIXME: this is fundamentally broken in the case of recursive types.
 		// See Issue #298.
 		if (t instanceof Type.Any) {
-			return new SyntacticType.Any(attributes(branch));
+			return new SyntacticType.Any(wycsAttributes(branch));
 		} else if (t instanceof Type.Void) {
-			return new SyntacticType.Void(attributes(branch));
+			return new SyntacticType.Void(wycsAttributes(branch));
 		} else if (t instanceof Type.Null) {
 			// FIXME: implement SyntacticType.Null
 			//return new SyntacticType.Null(attributes(branch));
-			return new SyntacticType.Any(attributes(branch));
+			return new SyntacticType.Any(wycsAttributes(branch));
 		} else if (t instanceof Type.Bool) {
-			return new SyntacticType.Bool(attributes(branch));
+			return new SyntacticType.Bool(wycsAttributes(branch));
 		} else if (t instanceof Type.Char) {
 			// FIXME: implement SyntacticType.Char
 			//return new SyntacticType.Char(attributes(branch));
-			return new SyntacticType.Int(attributes(branch));
+			return new SyntacticType.Int(wycsAttributes(branch));
 		} else if (t instanceof Type.Byte) {
 			// FIXME: implement SyntacticType.Byte
 			//return new SyntacticType.Byte(attributes(branch));
-			return new SyntacticType.Int(attributes(branch));
+			return new SyntacticType.Int(wycsAttributes(branch));
 		} else if (t instanceof Type.Int) {
-			return new SyntacticType.Int(attributes(branch));
+			return new SyntacticType.Int(wycsAttributes(branch));
 		} else if (t instanceof Type.Real) {
-			return new SyntacticType.Real(attributes(branch));
+			return new SyntacticType.Real(wycsAttributes(branch));
 		} else if (t instanceof Type.Strung) {
 			// FIXME: implement SyntacticType.Strung
 			//return new SyntacticType.Strung(attributes(branch));
-			return new SyntacticType.List(new SyntacticType.Int(attributes(branch)));
+			return new SyntacticType.List(new SyntacticType.Int(wycsAttributes(branch)));
 		} else if (t instanceof Type.Set) {
 			Type.Set st = (Type.Set) t;
 			SyntacticType element = convert(st.element(), branch);
@@ -1262,8 +1358,9 @@ public class VcGenerator {
 			Type.FunctionOrMethod ft = (Type.FunctionOrMethod) t;
 			return new SyntacticType.Any();
 		} else {
-			internalFailure("unknown type encountered (" + t.getClass().getName() + ")", filename,
-					branch.attributes());
+			internalFailure("unknown type encountered ("
+					+ t.getClass().getName() + ")", filename,
+					rootBlock.attributes(branch.pc()));
 			return null;
 		}
 	}
@@ -1299,14 +1396,16 @@ public class VcGenerator {
 
 	/**
 	 * Convert the attributes at the current location in a given branch into
-	 * those appropriate for WyCC.
+	 * those appropriate for WyCS.
 	 * 
 	 * @param branch
 	 * @return
 	 */
-	private static Collection<wycc.lang.Attribute> attributes(
+	private static Collection<wycc.lang.Attribute> wycsAttributes(
 			VcBranch branch) {
 		// FIXME: to do!
 		return Collections.EMPTY_LIST;
 	}
+	
+	
 }
